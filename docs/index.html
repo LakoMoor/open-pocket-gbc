@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Pocket GBC</title>
+<meta name="description" content="Game Boy / Game Boy Color on the Sipeed Tang Nano 20K: HDMI, Pocket-style menu, ST7735 LCD, USB remote. Built only with open-source FPGA tools.">
+<meta property="og:title" content="Open Pocket GBC">
+<meta property="og:description" content="Game Boy / Game Boy Color on a $25 FPGA board, built with an open-source toolchain.">
+<meta property="og:image" content="img/city.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0e1013; --bg2: #161a1f; --card: #1b2026; --line: #2a3139;
+  --text: #e8ecef; --muted: #9aa5b1; --accent: #8bac0f; --accent2: #3a6ff0; --shell: #c4cfa1;
+  --code: #11151a;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f2ea; --bg2: #ebe8dc; --card: #ffffff; --line: #d9d4c3;
+    --text: #1d2125; --muted: #5b6570; --accent: #4d7a00; --accent2: #2a58d0; --shell: #8b956d;
+    --code: #f0ede2;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f4f2ea; --bg2: #ebe8dc; --card: #ffffff; --line: #d9d4c3;
+  --text: #1d2125; --muted: #5b6570; --accent: #4d7a00; --accent2: #2a58d0; --shell: #8b956d;
+  --code: #f0ede2;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; }
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; display: block; image-rendering: pixelated; }
+.hero .grid > *, .features > *, .gallery > *, .split > *, .docs > *, .tool-row > *, .stat > * { min-width: 0; }
+body { overflow-x: hidden; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+.pixel { font-family: "Press Start 2P", monospace; letter-spacing: .02em; }
+
+/* nav */
+nav { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+nav .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
+nav .brand { font-size: 12px; color: var(--text); white-space: nowrap; }
+nav .links { display: flex; gap: 18px; margin-left: auto; font-size: 14px; overflow-x: auto; }
+nav .links a { color: var(--muted); white-space: nowrap; }
+nav .links a:hover { color: var(--text); text-decoration: none; }
+.gh { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text) !important; }
+
+/* hero */
+.hero { padding: 64px 0 40px; }
+.hero .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center; }
+.hero h1 { font-size: clamp(22px, 4vw, 36px); line-height: 1.35; margin: 0 0 20px; }
+.hero h1 span { color: var(--accent); }
+.hero p.lead { font-size: 18px; color: var(--muted); margin: 0 0 28px; }
+.btns { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { padding: 12px 20px; border-radius: 10px; font-weight: 600; border: 1px solid var(--line); color: var(--text); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #0e1013; }
+.btn:hover { text-decoration: none; filter: brightness(1.08); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+.chip { font: 12px "JetBrains Mono", monospace; padding: 4px 10px; border-radius: 999px; background: var(--bg2); border: 1px solid var(--line); color: var(--muted); }
+
+/* handheld frame */
+.device { background: var(--shell); border-radius: 22px 22px 60px 22px; padding: 22px 22px 70px; box-shadow: 0 20px 60px rgba(0,0,0,.35); position: relative; }
+.device .screen { background: #000; border-radius: 8px; padding: 10px; }
+.device .screen img { border-radius: 4px; width: 100%; }
+.device .label { position: absolute; left: 26px; bottom: 26px; font: 10px "Press Start 2P", monospace; color: rgba(0,0,0,.55); }
+.device .dots { position: absolute; right: 30px; bottom: 22px; display: flex; gap: 12px; }
+.device .dots i { width: 30px; height: 30px; border-radius: 50%; background: #7b2d4a; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); display: block; }
+
+/* sections */
+section { padding: 56px 0; border-top: 1px solid var(--line); }
+section h2 { font-size: 16px; margin: 0 0 8px; }
+section .sub { color: var(--muted); margin: 0 0 32px; max-width: 720px; }
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.card h3 { margin: 0 0 6px; font-size: 16px; }
+.card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+.card .ic { font-size: 22px; margin-bottom: 8px; }
+
+.gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+figure img { width: 100%; }
+figcaption { padding: 10px 14px; font-size: 14px; color: var(--muted); }
+.wide { grid-column: span 3; }
+.two { grid-column: span 2; }
+
+/* tables / code */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; background: var(--bg2); }
+tr:last-child td { border-bottom: 0; }
+td.pin { font-family: "JetBrains Mono", monospace; color: var(--accent); }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; font: 13.5px/1.6 "JetBrains Mono", monospace; margin: 0; }
+pre .c { color: var(--muted); }
+kbd { font: 12px "JetBrains Mono", monospace; padding: 2px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--bg2); }
+.tool-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.tool { text-align: center; padding: 16px 8px; }
+.tool b { display: block; font-size: 15px; }
+.tool span { font-size: 12.5px; color: var(--muted); }
+.stat { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 24px; }
+.stat .card b { display: block; font-size: 26px; font-weight: 800; color: var(--accent); }
+.stat .card span { color: var(--muted); font-size: 13.5px; }
+.docs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.docs a.card { color: var(--text); }
+.docs a.card:hover { border-color: var(--accent); text-decoration: none; }
+footer { padding: 36px 0 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+.theme { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 9px; cursor: pointer; }
+
+@media (max-width: 900px) {
+  .hero .grid, .split { grid-template-columns: 1fr; }
+  .features, .gallery, .docs { grid-template-columns: 1fr 1fr; }
+  .wide { grid-column: span 2; } .two { grid-column: span 2; }
+  .tool-row { grid-template-columns: repeat(3, 1fr); }
+  .stat { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
+  .features, .gallery, .docs, .tool-row { grid-template-columns: 1fr; }
+  .wide, .two { grid-column: span 1; }
+  nav .links a:not(.gh) { display: none; }
+  .hero { padding-top: 36px; }
+  .hero h1 { font-size: 18px; }
+  .device { padding: 12px 12px 56px; border-radius: 16px 16px 40px 16px; }
+  .device .dots i { width: 22px; height: 22px; }
+  pre { font-size: 12px; }
+  table { font-size: 13px; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand pixel" href="#">OPEN POCKET GBC</a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#demo">Demo</a>
+      <a href="#wiring">Wiring</a>
+      <a href="#build">Build</a>
+      <a href="#docs">Docs</a>
+      <a class="gh" href="https://github.com/LakoMoor/open-pocket-gbc">GitHub ↗</a>
+    </div>
+    <button class="theme" id="theme" aria-label="Toggle theme">◐</button>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap grid">
+    <div>
+      <h1 class="pixel">Game Boy Color<br>on a <span>Tang Nano 20K</span></h1>
+      <p class="lead">The MiSTer Game Boy core running natively on a small Gowin FPGA board, with HDMI output, an Analogue Pocket–style menu and an optional SPI LCD. Every step from source to bitstream uses open-source tools.</p>
+      <div class="btns">
+        <a class="btn primary" href="https://github.com/LakoMoor/open-pocket-gbc">View on GitHub</a>
+        <a class="btn" href="#build">Build it</a>
+      </div>
+      <div class="chips">
+        <span class="chip">GW2AR-18</span><span class="chip">HDMI 480p + audio</span><span class="chip">ST7735 LCD</span>
+        <span class="chip">yosys · nextpnr · Apicula</span><span class="chip">GPL-3.0</span>
+      </div>
+    </div>
+    <div class="device">
+      <div class="screen"><img src="img/ucity.gif" alt="uCity running on the Tang Nano 20K, captured over HDMI" width="560" height="315"></div>
+      <div class="label">OPEN POCKET</div>
+      <div class="dots"><i></i><i></i></div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2 class="pixel">Features</h2>
+    <p class="sub">The full GB/GBC system on a 20K-LUT FPGA, with the parts of a handheld you need around it.</p>
+    <div class="features">
+      <div class="card"><div class="ic">🎮</div><h3>MiSTer Game Boy core</h3><p>GB and GBC modes, double speed, HDMA, audio. MBC1/2/3/5, HuC1/HuC3 and plain-ROM carts.</p></div>
+      <div class="card"><div class="ic">📺</div><h3>HDMI with audio</h3><p>720×480p at 59.94 Hz, 3× integer scaling, 48 kHz stereo embedded in HDMI. Triple-buffered, so there is no tearing.</p></div>
+      <div class="card"><div class="ic">🟩</div><h3>Pocket-style display</h3><p>Sharp, LCD grid and scanline modes, five DMG palettes and GBC LCD color correction.</p></div>
+      <div class="card"><div class="ic">📋</div><h3>On-screen menu</h3><p>Game picker, display settings, Auto/GBC/DMG system mode. The game pauses and dims behind the menu.</p></div>
+      <div class="card"><div class="ic">🖥️</div><h3>1.44" SPI LCD</h3><p>ST7735S 128×128 driven together with HDMI at about 60 fps, in Fit (filtered) or Crop (1:1) mode.</p></div>
+      <div class="card"><div class="ic">🕹️</div><h3>Three input paths</h3><p>DualShock 2, eight plain buttons on header pins, and a remote over the board's USB-UART. All work together.</p></div>
+      <div class="card"><div class="ic">🐞</div><h3>Debug overlay</h3><p>FPS, CPU mode and speed, live pad state, uptime, mapper and ROM size, drawn in the HDMI border.</p></div>
+      <div class="card"><div class="ic">💾</div><h3>Games in SPI flash</h3><p>Up to 15 ROMs in the on-board flash, loaded into SDRAM in about a second.</p></div>
+      <div class="card"><div class="ic">🔓</div><h3>No vendor IDE</h3><p>yosys + slang, GHDL, nextpnr-himbaechel, Apicula, openFPGALoader.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <h2 class="pixel">Demo</h2>
+    <p class="sub">Everything below was captured from the board over HDMI. The button presses came from <code>tools/record.py</code> over USB, not from a person.</p>
+    <div class="gallery">
+      <figure><img src="img/boot.gif" alt="Boot sequence after reset" loading="lazy"><figcaption>Boot after reset</figcaption></figure>
+      <figure><img src="img/load_game.gif" alt="Loading a game from the menu" loading="lazy"><figcaption>Loading a game from flash</figcaption></figure>
+      <figure><img src="img/menu.gif" alt="Menu navigation" loading="lazy"><figcaption>Menu navigation</figcaption></figure>
+      <figure class="wide"><img src="img/debug_play.gif" alt="Libbet gameplay with the debug overlay showing pad state" loading="lazy"><figcaption>Gameplay with the debug overlay: FPS, DMG mode, live button state and uptime</figcaption></figure>
+      <figure><img src="img/menu.png" alt="Main menu" loading="lazy"><figcaption>Main menu</figcaption></figure>
+      <figure><img src="img/games.png" alt="Game list" loading="lazy"><figcaption>Game list</figcaption></figure>
+      <figure><img src="img/city.png" alt="uCity city view" loading="lazy"><figcaption>µCity, a homebrew city builder</figcaption></figure>
+      <figure class="wide"><img src="img/display_modes.png" alt="Sharp, LCD grid and scanline display modes" loading="lazy"><figcaption>Display modes: Sharp · LCD grid · Scanlines</figcaption></figure>
+      <figure class="wide"><img src="img/palettes.png" alt="Five DMG palettes" loading="lazy"><figcaption>DMG palettes: Light · Amber · Gray · Green · Pocket</figcaption></figure>
+      <figure class="two"><img src="img/lcd_sim.png" alt="LCD output in Fit and Crop modes" loading="lazy"><figcaption>ST7735 output in Fit and Crop modes. These are simulation renders of the real LCD RTL, not photos.</figcaption></figure>
+      <figure><img src="img/debug.png" alt="Debug overlay" loading="lazy"><figcaption>Debug lines in the HDMI border</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="wiring">
+  <div class="wrap">
+    <h2 class="pixel">Wiring</h2>
+    <p class="sub">Everything connects to the header pins. Each button goes from its pin to GND; the FPGA's internal pull-ups are enabled. The LCD runs on 3.3 V.</p>
+    <div class="split">
+      <table>
+        <tr><th>Button</th><th>Pin</th><th>Button</th><th>Pin</th></tr>
+        <tr><td>Up</td><td class="pin">25</td><td>A</td><td class="pin">29</td></tr>
+        <tr><td>Down</td><td class="pin">26</td><td>B</td><td class="pin">30</td></tr>
+        <tr><td>Left</td><td class="pin">27</td><td>Select</td><td class="pin">31</td></tr>
+        <tr><td>Right</td><td class="pin">28</td><td>Start</td><td class="pin">77</td></tr>
+        <tr><td>Menu</td><td class="pin">S1</td><td>Reset game</td><td class="pin">S2</td></tr>
+      </table>
+      <table>
+        <tr><th>ST7735 LCD</th><th>Pin</th><th>Other</th><th>Pin</th></tr>
+        <tr><td>SCL / SCK</td><td class="pin">73</td><td>DualShock 2</td><td class="pin">17–20</td></tr>
+        <tr><td>SDA / MOSI</td><td class="pin">74</td><td>HDMI</td><td class="pin">on board</td></tr>
+        <tr><td>RES</td><td class="pin">71</td><td>USB remote</td><td class="pin">USB-C</td></tr>
+        <tr><td>DC / A0</td><td class="pin">72</td><td>VCC</td><td class="pin">3V3</td></tr>
+        <tr><td>CS · BL</td><td class="pin">53 · 52</td><td>GND</td><td class="pin">GND</td></tr>
+      </table>
+    </div>
+    <p class="sub" style="margin-top:24px">In the menu: <kbd>↑</kbd><kbd>↓</kbd> move the cursor, <kbd>←</kbd><kbd>→</kbd> change a value, <kbd>A</kbd> selects, <kbd>B</kbd> goes back. Open the menu with <kbd>Select</kbd>+<kbd>Start</kbd> or board button <kbd>S1</kbd>.</p>
+  </div>
+</section>
+
+<section id="build">
+  <div class="wrap">
+    <h2 class="pixel">Build</h2>
+    <p class="sub">An open-source flow from source to bitstream. The VHDL parts of the core (CPU, APU) are converted with GHDL; everything else goes through yosys-slang.</p>
+    <div class="tool-row">
+      <div class="card tool"><b>yosys + slang</b><span>synthesis</span></div>
+      <div class="card tool"><b>GHDL</b><span>VHDL → Verilog</span></div>
+      <div class="card tool"><b>nextpnr</b><span>himbaechel, place &amp; route</span></div>
+      <div class="card tool"><b>Apicula</b><span>Gowin bitstream</span></div>
+      <div class="card tool"><b>openFPGALoader</b><span>flashing</span></div>
+    </div>
+    <div class="split" style="margin-top:24px">
+<pre><span class="c"># build the bitstream (~8 min)</span>
+./build.sh gbc_top
+
+<span class="c"># write it to the SPI flash</span>
+./flash.sh flash
+
+<span class="c"># pack games and write them at 0x200000</span>
+python tools/make_games.py build/games.bin \
+    games/ucity.gbc=uCity games/libbet.gb
+./flash.sh games</pre>
+<pre><span class="c"># play from the PC keyboard over USB</span>
+python tools/remote.py
+
+<span class="c"># or script button presses</span>
+python tools/remote.py "M . D D A . D A"
+
+<span class="c"># record a GIF from an HDMI capture card</span>
+python tools/record.py demo.gif \
+    "M . D D D . R . R . A" --secs 10</pre>
+    </div>
+    <div class="stat">
+      <div class="card"><b>82%</b><span>of 20 736 LUT4</span></div>
+      <div class="card"><b>45/46</b><span>BSRAM blocks</span></div>
+      <div class="card"><b>56 MHz</b><span>Fmax of the 33.75 MHz system clock</span></div>
+      <div class="card"><b>0</b><span>vendor tools</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2 class="pixel">Documentation</h2>
+    <p class="sub">The detailed guides live in the repository.</p>
+    <div class="docs">
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/build.md"><h3>Build &amp; flash →</h3><p>Toolchain, USB driver, build switches, game image format.</p></a>
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/hardware.md"><h3>Hardware →</h3><p>Pin map, LCD module parameters, controllers.</p></a>
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/menu.md"><h3>Menu →</h3><p>Every menu item and the debug overlay fields.</p></a>
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/remote.md"><h3>USB remote →</h3><p>UART protocol, scripting, recording demos.</p></a>
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/architecture.md"><h3>Architecture →</h3><p>Clocks, SDRAM, framebuffer, video, notes on the open flow.</p></a>
+      <a class="card" href="https://github.com/LakoMoor/open-pocket-gbc/blob/main/docs/README.ru.md"><h3>По-русски →</h3><p>Описание проекта на русском языке.</p></a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Open Pocket GBC is released under the GPL-3.0. It builds on the <a href="https://github.com/MiSTer-devel/Gameboy_MiSTer">MiSTer Gameboy core</a>, <a href="https://github.com/LIJI32/SameBoy">SameBoy</a> boot ROMs, <a href="https://github.com/hdl-util/hdmi">hdl-util/hdmi</a> and <a href="https://github.com/nand2mario/nestang">NESTang</a>. The included games are <a href="https://github.com/AntonioND/ucity">µCity</a> by AntonioND and <a href="https://github.com/pinobatch/libbet">Libbet</a> by Damian Yerrick.<br>
+    Game Boy is a trademark of Nintendo. Not affiliated with Nintendo or Analogue.
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement, key = 'opgbc-theme';
+  try { var t = localStorage.getItem(key); if (t) root.setAttribute('data-theme', t); } catch (e) {}
+  document.getElementById('theme').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme') ||
+      (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    var next = cur === 'light' ? 'dark' : 'light';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem(key, next); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
