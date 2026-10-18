@@ -1,0 +1,16 @@
+# build output
+build/
+*.vvp
+*.log
+sim/
+
+# local reference checkouts (not part of the project)
+ref_apicula/
+ref_gbtang/
+ref_mister_gb/
+ref_nestang/
+
+# raw debug captures (curated media lives in docs/img)
+captures/
+
+__pycache__/

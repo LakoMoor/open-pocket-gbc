@@ -1,0 +1,93 @@
+// Sipeed Tang Nano 20K (GW2AR-LV18QN88C8/I7)
+
+IO_LOC  "sys_clk" 4;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// Buttons (active high)
+IO_LOC  "s1" 88;
+IO_PORT "s1" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC  "s2" 87;
+IO_PORT "s2" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+
+// LEDs (active low). LEDs 2..5 share pins 17..20 with the DualShock adapter.
+IO_LOC  "led[0]" 15;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led[1]" 16;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// USB-C UART (BL616)
+IO_LOC  "uart_tx" 69;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "uart_rx" 70;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// HDMI
+IO_LOC  "tmds_clk_p" 33;
+IO_PORT "tmds_clk_p" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_clk_n" 34;
+IO_PORT "tmds_clk_n" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[0]" 35;
+IO_PORT "tmds_d_p[0]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[0]" 36;
+IO_PORT "tmds_d_n[0]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[1]" 37;
+IO_PORT "tmds_d_p[1]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[1]" 38;
+IO_PORT "tmds_d_n[1]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[2]" 39;
+IO_PORT "tmds_d_p[2]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[2]" 40;
+IO_PORT "tmds_d_n[2]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+
+// DualShock 2 adapter (Sipeed retro kit), port 1
+IO_LOC  "ds_clk" 17;
+IO_PORT "ds_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ds_cs" 18;
+IO_PORT "ds_cs" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ds_miso" 19;
+IO_PORT "ds_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "ds_mosi" 20;
+IO_PORT "ds_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// GPIO buttons (to GND, internal pull-ups) on the header
+// key_n: 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 select, 7 start
+IO_LOC  "key_n[0]" 25;
+IO_LOC  "key_n[1]" 26;
+IO_LOC  "key_n[2]" 27;
+IO_LOC  "key_n[3]" 28;
+IO_LOC  "key_n[4]" 29;
+IO_LOC  "key_n[5]" 30;
+IO_LOC  "key_n[6]" 31;
+IO_LOC  "key_n[7]" 77;
+IO_PORT "key_n[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[4]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[5]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[6]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "key_n[7]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// ST7735S 128x128 SPI LCD (module pins: SCL/SCK, SDA/MOSI, RES, DC/A0, CS, BL)
+IO_LOC  "lcd_scl" 73;
+IO_PORT "lcd_scl" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "lcd_sda" 74;
+IO_PORT "lcd_sda" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "lcd_rst" 71;
+IO_PORT "lcd_rst" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "lcd_dc" 72;
+IO_PORT "lcd_dc" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "lcd_cs" 53;
+IO_PORT "lcd_cs" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "lcd_bl" 52;
+IO_PORT "lcd_bl" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// On-board SPI flash (bitstream + ROM storage)
+IO_LOC  "flash_cs_n" 60;
+IO_PORT "flash_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "flash_clk" 59;
+IO_PORT "flash_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "flash_mosi" 61;
+IO_PORT "flash_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "flash_miso" 62;
+IO_PORT "flash_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;

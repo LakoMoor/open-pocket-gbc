@@ -1,0 +1,123 @@
+# Open Pocket GBC
+
+**Game Boy / Game Boy Color for the Sipeed Tang Nano 20K: HDMI, a Pocket-style menu, an optional SPI LCD, built only with open-source tools.**
+
+[Русская версия](docs/README.ru.md)
+
+![uCity running on the Tang Nano 20K with the debug overlay](docs/img/ucity.gif)
+
+The MiSTer Game Boy core runs natively on the 20K's GW2AR-18 FPGA. Video goes out over HDMI (480p, 3× scaling, with audio) and, at the same time, to a cheap 1.44" ST7735S LCD. Games are stored in the on-board SPI flash and picked from an on-screen menu. Every step from source to bitstream uses open-source tools: yosys + slang, GHDL, nextpnr-himbaechel, Apicula and openFPGALoader. No Gowin IDE is needed.
+
+| Menu | Game list | Debug overlay |
+|---|---|---|
+| ![menu](docs/img/menu.png) | ![games](docs/img/games.png) | ![debug](docs/img/debug.png) |
+
+## Features
+
+- **Core:** MiSTer Gameboy core with GB and GBC modes, double speed, HDMA and audio. MBC1/2/3/5, HuC1/HuC3 and plain-ROM carts are supported.
+- **HDMI:** 720×480p, 59.94 Hz. The GB picture is scaled 3× to 480×432. Audio is embedded (48 kHz stereo). 720p is a build option.
+- **Pocket-style display modes:** *Sharp*, *LCD grid*, *Scanlines*. Five DMG palettes. GBC LCD color correction, which can be turned off.
+- **Menu (16×16 characters):** resume, reset, game picker, display/palette/color settings, LCD mode, system mode (Auto / GBC / DMG), debug overlay. The game pauses and dims while the menu is open.
+- **ST7735S 128×128 SPI LCD**, driven together with HDMI at about 60 fps. *Fit* mode filters 160×144 down to 128×115; *Crop* mode shows the center 128×128 at 1:1. The menu is shown on the LCD too.
+- **Controls:** DualShock 2 on the Sipeed adapter, 8 plain buttons on header pins, and a **remote over the board's USB-UART**. All three work at the same time.
+- **Debug overlay:** FPS, GB/GBC mode, CPU speed, live button state, uptime, game name, mapper and ROM size. It is drawn in the HDMI border and in the top row of the LCD.
+- **Games:** up to 15 games in the SPI flash at 0x200000, loaded into SDRAM in about a second.
+
+## Demo
+
+| Boot after reset | Loading a game | Gameplay + live pad state |
+|---|---|---|
+| ![boot](docs/img/boot.gif) | ![load](docs/img/load_game.gif) | ![debug play](docs/img/debug_play.gif) |
+
+Menu navigation, all recorded from the HDMI capture card while `tools/record.py` pressed the buttons over USB:
+
+![menu navigation](docs/img/menu.gif)
+
+| Display modes (crop, 2×) | DMG palettes (System = DMG) |
+|---|---|
+| ![display modes](docs/img/display_modes.png) | ![palettes](docs/img/palettes.png) |
+
+LCD output: Fit and Crop. These are simulation renders of the real `lcd_st7735` RTL fed with a captured frame:
+
+![LCD simulation](docs/img/lcd_sim.png)
+
+## Quick start
+
+```sh
+./build.sh gbc_top                                  # yosys -> nextpnr -> gowin_pack (~8 min)
+./flash.sh flash                                    # bitstream to SPI flash (./flash.sh sram = temporary)
+python tools/make_games.py build/games.bin games/ucity.gbc=uCity games/libbet.gb
+./flash.sh games                                    # game image to flash @ 0x200000
+```
+
+Toolchain setup, build options and the flash layout: [docs/build.md](docs/build.md).
+
+## Controls
+
+| Action | DualShock 2 | GPIO buttons | Board | PC remote (`tools/remote.py`) |
+|---|---|---|---|---|
+| D-pad | D-pad | Up/Down/Left/Right | | arrows |
+| A / B | ○ / ✕ (also △ / □) | A / B | | x / z |
+| Start / Select | Start / Select | Start / Select | | Enter / Backspace |
+| Open / close menu | Select + Start | Select + Start | **S1** | m |
+| Reset game | | | **S2** | r |
+
+In the menu: up/down moves the cursor, left/right changes a value, A selects, B goes back or closes.
+
+## Wiring
+
+Buttons go from each pin to GND; the internal pull-ups are enabled. The LCD runs on 3.3 V.
+
+| Signal | Pin | | Signal | Pin |
+|---|---|---|---|---|
+| Up | 25 | | LCD SCL | 73 |
+| Down | 26 | | LCD SDA | 74 |
+| Left | 27 | | LCD RES | 71 |
+| Right | 28 | | LCD DC | 72 |
+| A | 29 | | LCD CS | 53 |
+| B | 30 | | LCD BL | 52 |
+| Select | 31 | | DualShock 2 | 17–20 (Sipeed adapter) |
+| Start | 77 | | HDMI | on board |
+
+Details, LCD orientation and color parameters: [docs/hardware.md](docs/hardware.md).
+
+## Documentation
+
+- [docs/build.md](docs/build.md): toolchain, build, flashing, game images, build switches
+- [docs/hardware.md](docs/hardware.md): wiring, LCD module notes, controllers
+- [docs/menu.md](docs/menu.md): every menu item and the debug overlay
+- [docs/remote.md](docs/remote.md): USB-UART remote protocol, scripting, recording GIFs
+- [docs/architecture.md](docs/architecture.md): how the port works (clocks, SDRAM, framebuffer, video, the open-source flow)
+
+## Resource usage
+
+| | Used | Available | |
+|---|---|---|---|
+| LUT4 | 17 008 | 20 736 | 82 % |
+| BSRAM | 45 | 46 | 97 % |
+| clk_sys 33.75 MHz | Fmax ≈ 56 MHz | | passes |
+| clk_pixel 27 MHz (480p) | Fmax > 90 MHz | | passes |
+
+## Status and limitations
+
+- **Tested on hardware with the capture card:** HDMI video and audio path, menu, game loading, both included games, DMG/GBC modes, the USB remote, the debug overlay.
+- **Not tested on hardware:**
+  - The ST7735S LCD output is verified in simulation only.
+  - The DualShock 2 path is the same as NESTang's, but no controller was attached during testing.
+  - The GPIO buttons were only checked for idle state: no false presses with nothing connected.
+- **Saves are lost on power-off:** cart RAM is not yet written back to flash.
+- **Rare mappers are disabled to save logic:** MBC6, MBC7, MMM01, camera, TAMA5, Rocket, Sachen and MegaDuck. Build with `DEFS="-D ALL_MAPPERS"` to try them; it may not fit.
+- **720p is noisy:** the 720p build works but the 371 MHz TMDS link is noisy with the core running, so 480p is the default.
+
+## Credits and licenses
+
+This project is released under the **GPL-3.0** (see [LICENSE](LICENSE)). It includes or is derived from:
+
+- [MiSTer Gameboy core](https://github.com/MiSTer-devel/Gameboy_MiSTer), GPL-3.0: `rtl/gb/` (T80 CPU, PPU, APU, mappers)
+- [SameBoy](https://github.com/LIJI32/SameBoy) boot ROMs (MIT), as built by the MiSTer core: `rtl/gb_port/boot_rom.hex`
+- [hdl-util/hdmi](https://github.com/hdl-util/hdmi) (MIT / Apache-2.0): `rtl/hdmi/`
+- DualShock controller interface by K. Degawa, via [NESTang](https://github.com/nand2mario/nestang): `rtl/io/dualshock_controller.v` (freeware, non-commercial use)
+- [font8x8](https://github.com/dhepper/font8x8) (public domain)
+- Included homebrew games: [µCity](https://github.com/AntonioND/ucity) by AntonioND (GPL-3.0) and [Libbet and the Magic Floor](https://github.com/pinobatch/libbet) by Damian Yerrick (zlib)
+
+Game Boy and Game Boy Color are trademarks of Nintendo. This project is not affiliated with Nintendo or Analogue.
