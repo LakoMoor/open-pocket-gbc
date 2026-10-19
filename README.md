@@ -2,7 +2,7 @@
 
 **Game Boy / Game Boy Color for the Sipeed Tang Nano 20K: HDMI, a Pocket-style menu, an optional SPI LCD, built only with open-source tools.**
 
-**Website:** https://lakomoor.github.io/open-pocket-gbc/ · [Русская версия](docs/README.ru.md)
+**Website:** https://lakomoor.github.io/open-pocket-gbc/ · [Русская версия](docs/README.ru.md) · Sister project: [Open Pocket WS](https://github.com/LakoMoor/open-pocket-ws) (WonderSwan Color)
 
 ![uCity running on the Tang Nano 20K with the debug overlay](docs/img/ucity.gif)
 
