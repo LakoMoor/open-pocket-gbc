@@ -136,25 +136,25 @@ always @(posedge clk) begin
     end
 end
 
-reg [47:0] fifo [0:63];
+reg [47:0] fifo [0:31];
 reg  [6:0] wp, rp;
-wire [6:0] level = wp - rp;
+wire [5:0] level = wp - rp;
 always @(posedge clk) begin
     if (reset) begin
         wp <= 0;
         rp <= 0;
     end else begin
-        if (push && level != 7'd64) begin
-            fifo[wp[5:0]] <= push_data;
+        if (push && level != 6'd32) begin
+            fifo[wp[4:0]] <= push_data;
             wp <= wp + 1'd1;
         end
         if (wq_pop) rp <= rp + 1'd1;
     end
 end
 
-wire [47:0] head = fifo[rp[5:0]];
+wire [47:0] head = fifo[rp[4:0]];
 assign wq_empty = (level == 0);
-assign wq_level = level[6] ? 6'd63 : level[5:0];
+assign wq_level = level;
 assign wq_addr  = FB_BASE_W | {5'd0, head[47:46], head[45:32]};
 assign wq_data  = head[31:0];
 

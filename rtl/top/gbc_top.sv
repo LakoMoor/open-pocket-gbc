@@ -1,7 +1,7 @@
 // Open Pocket GBC: Game Boy / Game Boy Color for the Sipeed Tang Nano 20K.
 // MiSTer Gameboy core + SDRAM framebuffer + 720p HDMI (with audio) + Pocket-style menu,
-// games loaded from the on-board SPI flash, DualShock 2 controller and/or GPIO buttons,
-// optional 1.44" 128x128 ST7735S SPI LCD (runs together with HDMI).
+// games loaded from the SD card or the on-board SPI flash by a FemtoRV32 menu CPU (iosys),
+// DualShock 2 controller and/or GPIO buttons, optional 1.44" 128x128 ST7735S SPI LCD.
 module gbc_top (
     input             sys_clk,      // 27 MHz
     input             s1,           // menu
@@ -23,6 +23,22 @@ module gbc_top (
     output            lcd_bl,
 
     input             uart_rx,      // USB-UART from the BL616: remote control (tools/remote.py)
+    output            uart_tx,      // firmware log
+
+    // TF card (SPI mode)
+    output            sd_clk,
+    output            sd_cmd,       // MOSI
+    input             sd_dat0,      // MISO
+    output            sd_dat3,      // CS
+    output            sd_dat1,
+    output            sd_dat2,
+
+    output            ws2812,       // on-board RGB LED, kept dark
+
+    // buzzer / small speaker: 1-bit sigma-delta audio, spk_n is the inverted signal
+    // (piezo between the two pins, or one pin through a transistor / RC filter)
+    output            spk_p,
+    output            spk_n,
 
     output            ds_clk,
     output            ds_cs,
@@ -53,10 +69,11 @@ localparam [22:0] CRAM_BASE   = 23'h600000;
 // The HDMI PLL must get the PLL at X55Y45 (HCLK reach to the OSER10s); nextpnr hands
 // out PLL sites in instance order, so it is instantiated (and named) first.
 wire clk_p5, clk_p, hdmi_lock;
+wire hdmi_off;                       // firmware setting: HDMI PLL powered down
 `ifdef VIDEO_720P
 pll_hdmi    u_pll_a_hdmi (.clock_in(sys_clk), .clock_out(clk_p5), .locked(hdmi_lock));  // 371.25 MHz
 `else
-pll_hdmi480 u_pll_a_hdmi (.clock_in(sys_clk), .clock_out(clk_p5), .locked(hdmi_lock));  // 135 MHz
+pll_hdmi480 u_pll_a_hdmi (.clock_in(sys_clk), .pwrdn(hdmi_off), .clock_out(clk_p5), .locked(hdmi_lock));  // 135 MHz
 `endif
 
 wire clk_sys, clk_sys_p, gb_lock;
@@ -121,71 +138,93 @@ uart_pad #(.CLK_HZ(33_750_000)) u_uart_pad (
 );
 wire [11:0] pad_ok   = pad_ds | pad_gpio | pad_uart;
 
-// ================================================================ menu + loader
-wire        menu_open, gbc_raw, lcd_crop, dbg_on;
-wire  [1:0] sys_mode;
-reg   [7:0] cart_type, rom_size;     // from the cart header while loading
-wire  [1:0] disp_mode;
-wire  [2:0] dmg_pal;
-wire        menu_reset_req, load_req;
-wire  [3:0] load_idx, game_count, cur_game;
-wire [11:0] game_btn;
-wire        name_we;
-wire  [8:0] name_addr;
-wire  [7:0] name_data;
-wire        txt_we;
-wire  [8:0] txt_waddr;
-wire  [7:0] txt_wdata;
-wire        loading, dir_valid;
-
-menu u_menu (
-    .clk(clk_sys), .reset(sys_rst),
-    .btn(pad_ok), .key_menu(s1 | uart_menu), .key_reset(s2 | uart_reset),
-    .game_count(game_count), .cur_game(cur_game), .loading(loading),
-    .name_we(name_we), .name_waddr(name_addr), .name_wdata(name_data),
-    .menu_open(menu_open), .disp_mode(disp_mode), .dmg_pal(dmg_pal),
-    .gbc_raw(gbc_raw), .lcd_crop(lcd_crop), .sys_mode(sys_mode), .dbg_on(dbg_on),
-    .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed),
-    .cart_type(cart_type), .rom_size(rom_size),
-    .reset_req(menu_reset_req), .load_req(load_req), .load_idx(load_idx),
-    .game_btn(game_btn),
-    .txt_we(txt_we), .txt_waddr(txt_waddr), .txt_wdata(txt_wdata)
-);
-
-wire        sdram_ready;
-wire        ld_req, ld_ack;
-wire [20:0] ld_addr;
-wire [31:0] ld_data;
+// ================================================================ I/O CPU (menu, loader, saves)
+wire [31:0] ctrl, cfg;
 wire        ioctl_wr;
 wire [24:0] ioctl_addr;
 wire [15:0] ioctl_dout;
+wire        osd_we, txt_we;
+wire  [9:0] osd_waddr;
+wire [15:0] osd_wdata;
+wire  [8:0] txt_waddr;
+wire  [7:0] txt_wdata;
+wire        sdram_ready;
+wire        rv_req, rv_ack, rv_we, rv_rvalid;
+wire [20:0] rv_addr;
+wire [31:0] rv_wdata;
+wire  [3:0] rv_be;
+wire [31:0] lp_rdata;
 
-flash_loader u_loader (
-    .clk(clk_sys), .reset(sys_rst), .sdram_ready(sdram_ready),
-    .spi_cs_n(flash_cs_n), .spi_clk(flash_clk), .spi_mosi(flash_mosi), .spi_miso(flash_miso),
-    .game_count(game_count), .dir_valid(dir_valid),
-    .name_we(name_we), .name_addr(name_addr), .name_data(name_data),
-    .load_req(load_req), .load_idx(load_idx), .cur_game(cur_game), .loading(loading),
-    .ld_req(ld_req), .ld_addr(ld_addr), .ld_data(ld_data), .ld_ack(ld_ack),
-    .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout)
-);
-
-always @(posedge clk_sys) if (ioctl_wr) begin
-    if (ioctl_addr == 25'h146) cart_type <= ioctl_dout[15:8];
-    if (ioctl_addr == 25'h148) rom_size  <= ioctl_dout[7:0];
+// DS2 receiver starts with zeroed bytes (everything pressed): accept the pad only after
+// it was seen fully released for ~124 ms
+reg        armed;
+reg [21:0] arm_cnt;
+always @(posedge clk_sys) begin
+    if (sys_rst || pad_ok != 0) begin
+        if (!armed) arm_cnt <= 0;
+    end else if (!armed) begin
+        arm_cnt <= arm_cnt + 1'd1;
+        if (&arm_cnt) armed <= 1;
+    end
+    if (sys_rst) armed <= 0;
 end
+wire [11:0] pad_arm = armed ? pad_ok : 12'd0;
+reg  [1:0] s1_s, s2_s;
+always @(posedge clk_sys) begin s1_s <= {s1_s[0], s1}; s2_s <= {s2_s[0], s2}; end
+
+iosys #(.CLK_HZ(33_750_000)) u_io (
+    .clk(clk_sys), .reset(sys_rst), .sdram_ready(sdram_ready),
+    .rv_req(rv_req), .rv_ack(rv_ack), .rv_we(rv_we), .rv_addr(rv_addr), .rv_wdata(rv_wdata),
+    .rv_be(rv_be), .rv_rdata(lp_rdata), .rv_rvalid(rv_rvalid),
+    .flash_cs_n(flash_cs_n), .flash_clk(flash_clk), .flash_mosi(flash_mosi), .flash_miso(flash_miso),
+    .sd_cs_n(sd_dat3), .sd_clk(sd_clk), .sd_mosi(sd_cmd), .sd_miso(sd_dat0),
+    .uart_tx(uart_tx),
+    .inputs({uart_reset, uart_menu, s2_s[1], s1_s[1], pad_arm}),
+    .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .cram_wr(cram_wr & ~gb_reset),
+    .ctrl(ctrl), .cfg(cfg),
+    .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
+    .osd_we(osd_we), .osd_addr(osd_waddr), .osd_data(osd_wdata),
+    .txt_we(txt_we), .txt_addr(txt_waddr), .txt_data(txt_wdata)
+);
+assign sd_dat1 = 1'b1;
+assign sd_dat2 = 1'b1;
+assign ws2812  = 1'b0;
+
+// ctrl: [0] core reset  [1] pause  [2] ROM download  [4:3] system (auto/GBC/DMG)
+//       [5] OSD on  [6] OSD dims the game (menu; game buttons off)  [7] HDMI off
+//       [8] SPI LCD off  [9] LEDs on
+wire       core_rst   = ctrl[0];
+wire       core_pause = ctrl[1];
+wire       loading    = ctrl[2];
+wire [1:0] sys_mode   = ctrl[4:3];
+wire       menu_open  = ctrl[5];
+wire       menu_dim   = ctrl[6];
+assign     hdmi_off   = ctrl[7];
+wire       lcd_off    = ctrl[8];
+wire       led_en     = ctrl[9];
+// cfg: [1:0] display mode  [4:2] DMG palette  [5] raw GBC colours  [6] LCD crop
+//      [7] debug lines  [11:8] LCD backlight (0..15)  [14:12] volume (0..4)  [15] swap A/B
+//      [16] speaker on
+wire [1:0] disp_mode = cfg[1:0];
+wire [2:0] dmg_pal   = cfg[4:2];
+wire       gbc_raw   = cfg[5];
+wire       lcd_crop  = cfg[6];
+wire       dbg_on    = cfg[7];
+wire [3:0] lcd_bri   = cfg[11:8];
+wire [2:0] volume    = cfg[14:12];
+wire       swap_ab   = cfg[15];
+wire       spk_en    = cfg[16];
+
+wire [11:0] game_btn0 = menu_dim ? 12'd0 : pad_arm;
+// swap A/B: {.. X A ..} bits 9/8 and {Y B} bits 1/0
+wire [11:0] game_btn  = swap_ab ? {game_btn0[11:10], game_btn0[1], game_btn0[0], game_btn0[7:2], game_btn0[9], game_btn0[8]} : game_btn0;
 
 // ================================================================ Game Boy
 wire ce, ce_n, ce_2x, paused;
-ce_gen u_ce (.clk_sys(clk_sys), .pause(menu_open & ~loading), .ce(ce), .ce_n(ce_n), .ce_2x(ce_2x), .paused(paused));
+ce_gen u_ce (.clk_sys(clk_sys), .pause(core_pause & ~gb_reset), .ce(ce), .ce_n(ce_n), .ce_2x(ce_2x), .paused(paused));
 
 // reset: power-on, loading, menu "reset game" (stretched)
-reg [15:0] rst_stretch;
-always @(posedge clk_sys) begin
-    if (menu_reset_req) rst_stretch <= 16'hFFFF;
-    else if (rst_stretch != 0) rst_stretch <= rst_stretch - 1'd1;
-end
-wire gb_reset = sys_rst | ~sdram_ready | loading | (rst_stretch != 0);
+wire gb_reset = sys_rst | ~sdram_ready | loading | core_rst;
 
 wire isGBC_game;
 reg  isGBC = 0;
@@ -288,7 +327,7 @@ assign audio_l = 0; assign audio_r = 0; assign isGBC_game = 0; assign cram_wr = 
 // ================================================================ SDRAM
 wire        lp_req, lp_ack, lp_we, lp_rvalid;
 wire [20:0] lp_addr;
-wire [31:0] lp_wdata, lp_rdata;
+wire [31:0] lp_wdata;
 wire  [3:0] lp_be;
 wire        gb_running = ~gb_reset & ~paused;
 
@@ -332,14 +371,19 @@ fb_writer #(.FB_BASE_W(FB_BASE_W)) u_fbw (
 // ================================================================ SPI LCD
 wire [8:0] lcd_txt_a;
 reg  [7:0] lcd_txt_q;
+wire lcd_bl_core;
 lcd_st7735 #(.CLK_HZ(33_750_000)) u_lcd (
-    .clk(clk_sys), .reset(sys_rst),
+    .clk(clk_sys), .reset(sys_rst | lcd_off),
     .px_we(px_we), .px_first(px_first), .px_data(px_data),
-    .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .crop(lcd_crop), .menu_open(menu_open), .dbg_on(dbg_on),
+    .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .crop(lcd_crop), .menu_open(menu_open & menu_dim), .dbg_on(dbg_on),
     .txt_addr(lcd_txt_a), .txt_q(lcd_txt_q),
     .lcd_scl(lcd_scl), .lcd_sda(lcd_sda), .lcd_cs(lcd_cs), .lcd_dc(lcd_dc),
-    .lcd_rst(lcd_rst), .lcd_bl(lcd_bl)
+    .lcd_rst(lcd_rst), .lcd_bl(lcd_bl_core)
 );
+// backlight PWM (~8 kHz), off with the LCD
+reg [11:0] bl_cnt;
+always @(posedge clk_sys) bl_cnt <= bl_cnt + 1'd1;
+assign lcd_bl = ~lcd_off & (bl_cnt[11:8] < lcd_bri | lcd_bri == 4'd15);
 
 wire  [7:0] lb_raddr;
 wire [31:0] lb_q;
@@ -348,12 +392,20 @@ memsys #(.FB_BASE_W(FB_BASE_W)) u_mem (
     .lp_req(lp_req), .lp_ack(lp_ack), .lp_we(lp_we), .lp_addr(lp_addr), .lp_wdata(lp_wdata),
     .lp_be(lp_be), .lp_rdata(lp_rdata), .lp_rvalid(lp_rvalid),
     .wq_empty(wq_empty), .wq_addr(wq_addr), .wq_data(wq_data), .wq_level(wq_level), .wq_pop(wq_pop),
-    .ld_req(ld_req), .ld_addr(ld_addr), .ld_data(ld_data), .ld_ack(ld_ack),
+    .rv_req(rv_req), .rv_we(rv_we), .rv_addr(rv_addr), .rv_wdata(rv_wdata), .rv_be(rv_be),
+    .rv_ack(rv_ack), .rv_rvalid(rv_rvalid),
     .line_req_tgl(line_req_tgl), .line_req_no(line_req_no), .rd_buf(rd_buf),
     .vclk(clk_p), .lb_raddr(lb_raddr), .lb_q(lb_q)
 );
 
-// ================================================================ OSD text RAM
+// ================================================================ OSD RAM (42 x 24 cells)
+reg [15:0] osd_ram [0:1023];
+reg [15:0] osd_q;
+wire [9:0] osd_raddr;
+always @(posedge clk_sys) if (osd_we) osd_ram[osd_waddr] <= osd_wdata;
+always @(posedge clk_p) osd_q <= osd_ram[osd_raddr];
+
+// ================================================================ debug / LCD text RAM
 // port A (clk_sys): menu writes, SPI LCD reads in between; port B (clk_p): HDMI reads
 reg [7:0] txt_ram [0:511];
 reg [7:0] txt_q;
@@ -370,9 +422,20 @@ wire        clk_audio;
 wire [15:0] aud_l, aud_r;
 audio_out u_audio (
     .clk(clk_sys), .ce(ce), .mute(gb_reset | paused),
-    .in_l(audio_l), .in_r(audio_r),
+    .in_l(audio_l), .in_r(audio_r), .volume(volume),
     .clk_audio(clk_audio), .out_l(aud_l), .out_r(aud_r)
 );
+// speaker: first-order sigma-delta of the mono mix at clk_sys; pins idle low when off
+reg [16:0] spk_acc;
+reg        spk_q;
+wire [16:0] spk_mono = {aud_l[15], aud_l} + {aud_r[15], aud_r};
+always @(posedge clk_sys) begin
+    spk_acc <= {1'b0, spk_acc[15:0]} + {1'b0, ~spk_mono[16], spk_mono[15:1]};
+    spk_q   <= spk_en & spk_acc[16];
+end
+assign spk_p = spk_q;
+assign spk_n = spk_en & ~spk_q;
+
 // HDMI audio clock in the pixel domain (74.25 MHz / 1547 = 48 kHz), like hdmi_test_top.
 // Samples cross from clk_sys: accept a value only after it was stable for two clocks.
 `ifdef VIDEO_720P
@@ -408,10 +471,8 @@ always @(posedge clk_sys) begin
     if (lcd_clkena & ce)  dbg_clkena <= 1;
     if (lp_rvalid)        dbg_lpr    <= 1;
     if (vs_event)         dbg_frame  <= ~dbg_frame;
-    if (ld_ack)           dbg_ld     <= 1;
     if (ioctl_wr)         dbg_ioctl  <= 1;
     if (cart_rd & ~gb_reset) dbg_cartrd <= 1;
-    if (ld_ack && ld_addr == 21'h40) dbg_byte <= ld_data[7:0];  // ROM byte 0x100
 end
 wire [31:0] dbg = {pad, s1, s2, menu_open, paused, ds_rx0, ds_rx1, 2'b00};
 
@@ -437,7 +498,8 @@ video_out #(.P480(P480)) u_video (
     .lb_addr(lb_raddr), .lb_q(lb_q),
     .txt_addr(txt_raddr), .txt_q(txt_q),
     .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .disp_mode(disp_mode),
-    .scale4(1'b0), .menu_open(menu_open), .dbg_on(dbg_on),
+    .osd_addr(osd_raddr), .osd_q(osd_q),
+    .scale4(1'b0), .menu_open(menu_open), .osd_dim(menu_dim), .dbg_on(dbg_on),
     .dbg(dbg)
 );
 
@@ -461,6 +523,6 @@ hdmi #(
 
 TLVDS_OBUF u_obuf [3:0] (.I({tmds_clock, tmds}), .O({tmds_clk_p, tmds_d_p}), .OB({tmds_clk_n, tmds_d_n}));
 
-assign led = {~menu_open, ~loading};
+assign led = ~({menu_open & menu_dim, loading} & {2{led_en}});
 
 endmodule

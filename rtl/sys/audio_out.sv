@@ -6,6 +6,7 @@ module audio_out (
     input             clk,          // clk_sys 33.75 MHz
     input             ce,           // 4 MHz
     input             mute,
+    input       [2:0] volume,       // 0..4 = 0, 25, 50, 75, 100 %
     input      [15:0] in_l,
     input      [15:0] in_r,
     output reg        clk_audio,
@@ -23,6 +24,16 @@ always @(posedge clk) begin
     end
 end
 
+function automatic [15:0] vol(input signed [15:0] x);
+    case (volume)
+        3'd0:    vol = 16'd0;
+        3'd1:    vol = x >>> 2;
+        3'd2:    vol = x >>> 1;
+        3'd3:    vol = (x >>> 1) + (x >>> 2);
+        default: vol = x;
+    endcase
+endfunction
+
 reg [9:0] div;
 always @(posedge clk) begin
     if (div == 10'd702) div <= 0;
@@ -30,8 +41,8 @@ always @(posedge clk) begin
     if (div == 10'd0)   clk_audio <= 1;
     if (div == 10'd351) begin
         clk_audio <= 0;
-        out_l <= mute ? 16'd0 : l2[19:4];
-        out_r <= mute ? 16'd0 : r2[19:4];
+        out_l <= mute ? 16'd0 : vol(l2[19:4]);
+        out_r <= mute ? 16'd0 : vol(r2[19:4]);
     end
 end
 

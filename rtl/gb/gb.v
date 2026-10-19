@@ -911,7 +911,7 @@ hdma hdma(
 // 127 bytes internal zero page ram from $ff80 to $fffe
 wire cpu_wr_zpram = sel_zpram && !cpu_wr_n;
 
-dpram #(7) zpram (
+dpram_blk #(7) zpram (
 	.clock_a   (clk_sys      ), .clken_a (ce_cpu),
 	.address_a (cpu_addr[6:0]),
 	.wren_a    (cpu_wr_zpram ),

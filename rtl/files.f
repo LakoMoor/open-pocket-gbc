@@ -47,8 +47,9 @@ rtl/sys/ce_gen.sv
 rtl/sys/sdram_ctrl.sv
 rtl/sys/fb_writer.sv
 rtl/sys/memsys.sv
-rtl/sys/flash_loader.sv
-rtl/sys/menu.sv
+rtl/rv/femtorv32_quark.v
+rtl/sys/spi_byte.sv
+rtl/sys/iosys.sv
 rtl/sys/audio_out.sv
 rtl/video/gb_color.sv
 rtl/video/lcd_st7735.sv

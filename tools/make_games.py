@@ -1,4 +1,4 @@
-"""Build the game image for the SPI flash (see rtl/sys/flash_loader.sv).
+"""Build the game image for the SPI flash (read by the menu firmware, fw/src/main.c).
 usage: make_games.py out.bin rom1[=Name] [rom2[=Name] ...]   (max 15 games)
 Flash it with: openFPGALoader -b tangnano20k --external-flash -o 0x200000 out.bin"""
 import struct, sys, os

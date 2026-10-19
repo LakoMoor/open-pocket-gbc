@@ -4,6 +4,7 @@
   python tools/remote.py                      interactive: keys below, q quits
   python tools/remote.py "M . D D A . 2 M"    run a sequence
 
+The firmware log arriving on the same port is printed while a sequence runs.
 Interactive keys: arrows = d-pad, z = B, x = A, Enter = Start, Backspace = Select,
                   m = menu (S1), r = reset game (S2), q = quit
 Sequence tokens:
@@ -39,6 +40,19 @@ class Pad:
         self.hold, self.gap = hold, gap
         self.s.write(b'0')
 
+    def sleep(self, t):
+        # waits while echoing the firmware log (the board's UART TX) to stdout
+        end = time.time() + t
+        while True:
+            b = self.s.read(256)
+            if b:
+                sys.stdout.write(b.decode('latin-1').replace(chr(13), ''))
+                sys.stdout.flush()
+            left = end - time.time()
+            if left <= 0:
+                break
+            time.sleep(min(left, 0.02))
+
     def press(self, k):
         self.s.write(k.upper().encode())
 
@@ -47,20 +61,20 @@ class Pad:
 
     def tap(self, k, hold=None):
         self.press(k)
-        time.sleep(self.hold if hold is None else hold)
+        self.sleep(self.hold if hold is None else hold)
         self.release(k)
-        time.sleep(self.gap)
+        self.sleep(self.gap)
 
     def run(self, seq):
         for tok in seq.split():
             if tok == '.':
-                time.sleep(self.gap)
+                self.sleep(self.gap)
             elif tok[0] in '+-' and len(tok) == 2 and tok[1].upper() in BUTTONS:
                 (self.press if tok[0] == '+' else self.release)(tok[1])
             elif tok.upper() in BUTTONS:
                 self.tap(tok)
             else:
-                time.sleep(float(tok))
+                self.sleep(float(tok))
         self.s.write(b'0')
 
 

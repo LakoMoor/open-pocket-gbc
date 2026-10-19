@@ -8,11 +8,15 @@ flowchart LR
         UART[USB-UART remote] --> PAD
         PAD((OR))
     end
-    FLASH[(SPI flash<br/>games @ 0x200000)] --> LOADER[flash_loader]
-    LOADER -->|ROM words| MEMSYS
-    LOADER -->|header via ioctl| CART
-    PAD --> MENU[menu]
-    MENU -->|game buttons| GB
+    FLASH[(SPI flash<br/>firmware, games,<br/>saves, settings)] <--> IOSYS
+    SD[(microSD)] <--> IOSYS
+    subgraph iosys [iosys: FemtoRV32 RV32E + boot ROM]
+        IOSYS[menu firmware<br/>FatFs, loader, saves]
+    end
+    IOSYS <-->|code, ROM, cart RAM| MEMSYS
+    IOSYS -->|header via ioctl| CART
+    PAD --> IOSYS
+    PAD -->|game buttons| GB
     subgraph core [MiSTer Gameboy core, clk_sys 33.75 MHz]
         GB[gb: T80 CPU, PPU, APU] <--> CART[cart_top + mappers]
     end
@@ -23,8 +27,9 @@ flowchart LR
     SDRAMC <--> SDRAM[(8 MB SDRAM<br/>in package)]
     FBW -->|same pixels| LCD[lcd_st7735<br/>128x128 BSRAM frame]
     MEMSYS -->|line buffer| VIDEO[video_out<br/>scale, palettes, OSD]
-    MENU -->|text RAM| VIDEO
-    MENU -->|text RAM| LCD
+    IOSYS -->|OSD RAM 42x24| VIDEO
+    IOSYS -->|text RAM 16x16| LCD
+    GB -->|audio| SPK[speaker pins<br/>sigma-delta]
     VIDEO --> HDMI[hdmi + OSER10<br/>480p + audio]
     GB -->|audio| HDMI
     LCD --> PANEL[ST7735S]
@@ -51,10 +56,11 @@ The MiSTer core uses gated clocks (`clk_sys & ce`) for some memories. The port r
 | `0x000000` | cartridge ROM (up to 6 MB) |
 | `0x600000` | cartridge RAM |
 | `0x700000` | framebuffer: 3 × 160×144 × 16 bit (two pixels per word) |
+| `0x780000` | menu firmware: code, data, stack (copied from flash 0x100000 by the boot ROM) |
 
 **`sdram_ctrl`:**
 - Serves the core's cart accesses first. They are edge-triggered on the core's `sdram_rd` strobe, which leaves enough time inside one CPU cycle.
-- Low-priority accesses come from `memsys`: framebuffer writes, line reads for HDMI, ROM loading. They are blocked while the CPU may start a cart access.
+- Low-priority accesses come from `memsys`: framebuffer writes, line reads for HDMI, and the menu CPU (lowest priority; only one read is in flight, so the read data goes back to whoever issued it). They are blocked while the CPU may start a cart access.
 - Each access takes 5 clocks with auto-refresh.
 
 ## Video
@@ -64,26 +70,35 @@ The MiSTer core uses gated clocks (`clk_sys & ce`) for some memories. The port r
   - Requests one GB line at a time from `memsys`, which copies it into a dual-clock line buffer.
   - Scales it 3×.
   - Applies the DMG palette or GBC color correction (`gb_color`) and the display mode.
-  - Draws the 16×16 OSD menu and the debug lines from the shared text RAM.
+  - Draws the OSD (42 × 24 cells of 16 × 20 px, `{bg, fg, char}` per cell, 16-colour palette; colour 0 shows the dimmed game, 15 the game at 1/8) and the debug lines.
 - **`hdmi`** (hdl-util): HDMI 1.4 with audio packets and AVI/SPD info frames. The 10:1 serialization uses Gowin `OSER10` and `TLVDS_OBUF` primitives.
 - **`lcd_st7735`:** see [hardware.md](hardware.md#st7735s-lcd).
 
-## Menu and text RAM
+## Menu CPU (`rtl/sys/iosys.sv`, `fw/`)
 
-`menu` keeps all settings and writes characters into a 512-byte text RAM:
-- **`0x000–0x0FF`:** the 16×16 menu. Redrawn on every change.
-- **`0x100–0x1BF`:** three debug lines, refreshed 8× per second when Debug is on.
+**CPU:** FemtoRV32 Quark changed to RV32E, with the 16 registers in one block RAM (rs1 is read in an extra state, rs2 straight from the RAM output). About 550 LUTs. It runs at clk_sys from SDRAM through `memsys`.
 
-The RAM is dual-port. HDMI reads it on port B (`clk_p`). The LCD reads it on port A (`clk_sys`) between menu writes.
+**Boot:** a 19-word boot ROM (`fw/boot/boot.S`, compiled into `rtl/sys/bootrom.vh`) reads the length word at flash 0x100000, copies the firmware to SDRAM 0x780000 and jumps there.
+
+| Address | Content |
+|---|---|
+| `0x0000_0000` | SDRAM (8 MB) |
+| `0x0100_0000` | boot ROM |
+| `0x0200_0000` | registers: inputs, ms timer, status (GBC, 2×, cart RAM written, frame count), SD SPI, flash SPI (byte and 4-byte word reads), UART TX, `WAIT`, `CTRL`, `CFG`, ioctl address / data |
+| `0x0300_0000` | OSD RAM, 1024 × 16 bit |
+| `0x0310_0000` | LCD / debug text RAM, 512 × 8 bit |
+
+`CTRL` holds the core reset, pause, ROM download, system mode, OSD on / dim, HDMI off, LCD off and LED enable; `CFG` the display, palette, LCD, volume, A/B swap and speaker settings. A read of `WAIT` stalls the bus until an input changes or the written timeout runs out, which is how the firmware idles.
 
 ## Game loading
 
-`flash_loader`:
-1. Reads the directory at 0x200000.
-2. Copies the selected ROM from SPI flash into SDRAM (about 1 s per MB).
-3. Feeds the same bytes to the core's `cart_top` through the MiSTer `ioctl` interface, so the core parses the cart header (mapper, RAM size, CGB flag) exactly as on MiSTer.
+The firmware:
+1. Holds the core in reset and raises the ROM download flag.
+2. Copies the ROM into SDRAM from the SD card (FatFs, multi-block reads) or the flash.
+3. Feeds the first 0x150 bytes of every 16 KB bank to `cart_top` through the MiSTer `ioctl` interface, so the core parses the header (mapper, RAM size, CGB flag) and builds its ROM mask as on MiSTer.
+4. Loads the save into the cart RAM area, then releases the reset.
 
-The game is held in reset while loading.
+The core's clock enables keep running during the reset; the core only resets on them.
 
 ## Open-source flow notes
 
@@ -97,7 +112,7 @@ The game is held in reset while loading.
 | `CLKDIV` placement varied between runs. | Pinned by `rtl/board/place.py`. |
 | Black screen on the capture card. | Caused by a broken SPD info frame. `VENDOR_NAME` must be null-padded: `{"OpenGBC", 8'd0}`. |
 | Pins 33–40 are true-LVDS pins. | Use `TLVDS_OBUF`; `gowin_pack` rejects `ELVDS_OBUF` there. |
-| Placement fails near 46/46 BSRAM or with many LUT-RAMs. | Small RAMs are shared (the OSD text RAM serves both outputs) and rarely used mappers are compiled out. |
+| Placement fails near 46/46 BSRAM or with many LUT-RAMs. | Each RAM16SDP4 occupies 8 LUT sites. The framebuffer FIFO is 32 deep, the zero-page RAM and the RISC-V registers are in block RAM, and rarely used mappers are compiled out. |
 
 ## Source tree
 
@@ -108,7 +123,7 @@ rtl/
   gb/                     MiSTer Gameboy core (modified: clock enables, wired-OR mappers)
   gen/                    GHDL output (CPU, APU) + stubs
   gb_port/                RAM wrappers, boot ROM, savestate stubs
-  sys/                    sdram_ctrl, memsys, fb_writer, flash_loader, menu, ce_gen, audio_out
+  sys/                    sdram_ctrl, memsys, fb_writer, iosys (menu CPU), spi_byte, ce_gen, audio_out
   video/                  video_out, gb_color, lcd_st7735, font
   hdmi/                   hdl-util HDMI (Gowin serializer)
   io/                     DualShock 2, USB-UART remote

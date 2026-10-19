@@ -25,7 +25,7 @@ SL="--compat vcs --allow-use-before-declare --relax-enum-conversions --allow-mer
 GHDL_NETLISTS=""
 [ "$TOP" = gbc_top ] && GHDL_NETLISTS="read_verilog -overwrite rtl/gen/GBse.v rtl/gen/gbc_snd.v;"
 yosys -q -l "$OUT/yosys.log" -m slang -p "
-  read_slang $SL --top $TOP -D SYNTHESIS ${DEFS:-} -I rtl/gb $SRCS;
+  read_slang $SL --top $TOP -D SYNTHESIS ${DEFS:-} -I rtl/gb -I rtl/sys $SRCS;
   $GHDL_NETLISTS
   hierarchy -top $TOP;
   synth_gowin -top $TOP -family gw2a -json $OUT/synth.json;

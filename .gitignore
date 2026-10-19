@@ -14,3 +14,14 @@ ref_nestang/
 captures/
 
 __pycache__/
+
+# firmware build output
+fw/build/
+
+# the I/O system bench is kept
+!sim/
+sim/*
+!sim/iosys_tb.cpp
+!sim/build_iosys_tb.sh
+fw/boot/*.bin
+fw/boot/*.elf

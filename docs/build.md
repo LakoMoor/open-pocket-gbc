@@ -57,14 +57,28 @@ Pass Verilog defines through `DEFS`, e.g. `DEFS="-D MENU_AT_BOOT -D VIDEO_720P" 
 | File | Command | When |
 |---|---|---|
 | `rtl/gen/GBse.v`, `rtl/gen/gbc_snd.v`, `rtl/gen/ghdl_stubs.v` | `tools/gen_vhdl.sh` | after changing the VHDL in `rtl/gb/` |
-| `rtl/sys/osd_strings.hex`, `rtl/video/font8x8.hex` | `python tools/make_osd_roms.py` | after changing menu strings |
+| menu icons in `rtl/video/font8x8.hex`, `fw/src/glyphs.h` | `python tools/make_font_icons.py` | after changing the icons |
 | mapper wired-OR rewrite | `tools/fix_mappers.py` | only when re-importing MiSTer mappers |
+
+## Menu firmware
+
+```sh
+fw/build.sh                 # -> fw/build/fw.bin (u32 length + code), about 48 KB
+```
+
+Needs the xPack RISC-V GCC (`riscv-none-elf-gcc`; the path is set in `fw/build.sh`). The code is RV32E, `-Os`, linked at 0x780000. `fw/fatfs/` is FatFs R0.16 with long names and exFAT. The boot ROM source is `fw/boot/boot.S`; `fw/boot/make.sh` regenerates `rtl/sys/bootrom.vh` from it.
+
+**Simulation:** `sim/build_iosys_tb.sh` builds a Verilator bench of `iosys` with the real firmware, a SPI flash model holding `fw/build/fw.bin` and `build/games.bin`, an SDRAM model and a UART decoder. `build/viosys/Viosys.exe 1500 script.txt` prints the firmware log and the OSD as text; script lines are `<ms> <inputs hex>`.
+
+**Firmware log:** the firmware prints to the board's USB-UART (115200). `tools/remote.py` shows it while it sends buttons; `tools/fwlog.py` only listens.
 
 ## Flashing
 
 ```sh
 ./flash.sh sram             # load into FPGA SRAM: lost on power-off, fastest for testing
 ./flash.sh flash            # write the bitstream to the SPI flash (offset 0) and verify
+./flash.sh fw               # write the menu firmware at 0x100000
+./flash.sh all              # bitstream + firmware
 ./flash.sh games [img]      # write a game image (default build/games.bin) at 0x200000
 ```
 
@@ -78,12 +92,15 @@ python tools/make_games.py build/games.bin games/ucity.gbc=uCity games/libbet.gb
 - **Capacity:** up to 15 ROMs. The name is optional; without one, the title from the ROM header is used (max 24 characters).
 - **ROM size:** up to about 6 MB per ROM. The SDRAM holds ROM at 0, cart RAM at 6 MB and the framebuffer at 7 MB.
 
-The first game in the image is started after power-up. Others are picked in *Menu → Load game*.
+At power-up the last played game starts (or the menu, see System → Start-up). Games are picked in *Menu → Library → Internal Flash*; SD card games in *Library → SD Card*.
 
 Flash layout (8 MB on-board flash):
 
 | Offset | Content |
 |---|---|
-| `0x000000` | bitstream |
+| `0x000000` | bitstream (about 0.9 MB) |
+| `0x100000` | menu firmware: u32 length, then the code |
 | `0x200000` | 4 KB directory: `"GBCP"`, count, then 32-byte entries `{name[24], offset, size}` (little endian) |
-| `0x201000` | ROMs, each aligned to 4 KB |
+| `0x201000` | ROMs, each aligned to 4 KB, up to 0x600000 |
+| `0x600000` | save slots for flash games: 15 × 0x22000 (header sector + up to 128 KB) |
+| `0x7FF000` | settings |
