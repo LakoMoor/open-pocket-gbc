@@ -5,7 +5,8 @@
 //   fit  : 160x144 -> 128x115 with a 2-tap filter in both directions (5 -> 4), letterboxed
 //   crop : centre 128x128 1:1
 // A free-running SPI engine sends the frame to the panel continuously (~64 fps at
-// 16.9 MHz SCL) and draws the 16x16 character menu on top while it is open.
+// 16.9 MHz SCL) and draws the menu on top while it is open: 16 x 12 cells of 8 x 10 px
+// (4 px margin above and below) with {bg, fg, char} per cell, like the HDMI OSD.
 module lcd_st7735 #(
     parameter        CLK_HZ   = 33_750_000,
     parameter        SPI_HALF = 1,          // SCL half period in clk cycles (1: clk/2)
@@ -30,10 +31,10 @@ module lcd_st7735 #(
     input             menu_open,
     input             dbg_on,        // debug status line in the top text row
 
-    // menu text RAM read port (16 x 16 cells at 0, bit 7 = highlight; debug line at 384),
-    // one cycle latency
+    // menu text RAM read port: 16 x 12 cells {attr, char} at 0, debug line at 384,
+    // one cycle latency; char bit 7 repeats the top / bottom glyph row into the padding
     output reg  [8:0] txt_addr,
-    input       [7:0] txt_q,
+    input      [15:0] txt_q,
 
     output reg        lcd_scl,
     output            lcd_sda,
@@ -282,12 +283,20 @@ end
 always @(posedge clk) begin
     q_hi <= fb_hi[rd_a];
     q_lo <= fb_lo[rd_a];
-    fq   <= font_rom[{txt_q[6:0], pr_d[2:0]}];
+    fq   <= font_rom[{txt_q[6:0], fy_d}];
+    fext <= txt_q[7];
 end
 
 reg  [8:0]  q_hi_d;
 reg  [3:0]  q_lo_d;
-reg         hl_d;
+reg  [7:0]  attr_d;
+reg         fext;
+// text cell position, advanced pixel by pixel (p counts row-major from 0)
+reg  [3:0]  ty;                 // row inside the cell, 0..9
+reg  [3:0]  trow;               // cell row, 0..11
+reg         tvis;               // inside the 12 text rows (y 4..123)
+reg  [2:0]  fy, fy_d;
+reg         tpad, tpad_d, tpad_dd, tvis_d, tvis_dd;
 wire [15:0] game565 = {q_hi_d[8:5], q_hi_d[8], q_hi_d[4:0], q_hi_d[4], q_lo_d, q_lo_d[3]};
 wire [15:0] g_in  = inr_dd ? game565 : 16'h0000;
 // x0.375 per channel
@@ -295,7 +304,32 @@ wire [15:0] g_dim = {(g_in[15:11] >> 2) + (g_in[15:11] >> 3),
                      (g_in[10:5] >> 2) + (g_in[10:5] >> 3),
                      (g_in[4:0] >> 2) + (g_in[4:0] >> 3)};
 localparam [15:0] C_TEXT   = 16'hFFFF;
-localparam [15:0] C_ACCENT = {5'd7, 6'd27, 5'd30};
+// x1/8 for the menu backdrop
+wire [15:0] g_eighth = {2'b0, g_in[15:13], 3'b0, g_in[10:8], 2'b0, g_in[4:2]};
+// OSD palette in RGB565 (same colours as video_out pal16)
+function automatic [15:0] pal565(input [3:0] i);
+    case (i)
+        4'd1:  pal565 = 16'h0000;
+        4'd2:  pal565 = 16'h1082;
+        4'd3:  pal565 = 16'h2124;
+        4'd4:  pal565 = 16'h39E7;
+        4'd5:  pal565 = 16'h7BCF;
+        4'd6:  pal565 = 16'hBDF7;
+        4'd7:  pal565 = 16'hFFFF;
+        4'd8:  pal565 = 16'h3B7E;
+        4'd9:  pal565 = 16'h2E6E;
+        4'd10: pal565 = 16'hF623;
+        4'd11: pal565 = 16'hE247;
+        4'd12: pal565 = 16'h9B5C;
+        4'd13: pal565 = 16'h08C6;
+        4'd14: pal565 = 16'h25D4;
+        default: pal565 = 16'h0000;
+    endcase
+endfunction
+wire       fbit   = fq[3'd7 - pc_dd[2:0]] & (~tpad_dd | fext_d);
+reg        fext_d;
+wire [3:0] a_fg   = attr_d[3:0];
+wire [3:0] a_bg   = attr_d[7:4];
 
 always @(posedge clk) begin
     tx_go <= 0;
@@ -331,6 +365,7 @@ always @(posedge clk) begin
         M_RAMWR: if (!tx_busy && !tx_go) begin
             tx_go <= 1; tx_16 <= 0; tx_dc <= 0; tx_data <= 16'h002C;   // RAMWR
             p <= 0; fcnt <= 0;
+            tvis <= 0; ty <= 0; trow <= 0;
             m <= M_FETCH;
         end
         M_FETCH: begin
@@ -341,21 +376,23 @@ always @(posedge clk) begin
                     pr   <= p[13:7]; pc <= p[6:0];
                     inr  <= s_crop2 || (p[13:7] >= 7'd6 && p[13:7] < 7'd121);
                     rd_a <= s_crop2 ? p : {p[13:7] - 7'd6, p[6:0]};
-                    txt_addr <= {1'b0, p[13:10], p[6:3]};
-                    dov      <= s_dbg2 && p[13:10] == 4'd0;
-                    if (s_dbg2 && p[13:10] == 4'd0) txt_addr <= {5'b11000, p[6:3]};
+                    txt_addr <= {1'b0, trow, p[6:3]};
+                    dov      <= s_dbg2 && tvis && trow == 4'd0;
+                    if (s_dbg2 && trow == 4'd0) txt_addr <= {5'b11000, p[6:3]};
+                    fy       <= (ty == 4'd0) ? 3'd0 : (ty == 4'd9) ? 3'd7 : ty[2:0] - 3'd1;
+                    tpad     <= (ty == 4'd0) || (ty == 4'd9);
                 end
-                3'd1: begin pr_d <= pr; pc_d <= pc; inr_d <= inr; dov_d <= dov; end
+                3'd1: begin pr_d <= pr; pc_d <= pc; inr_d <= inr; dov_d <= dov; fy_d <= fy; tpad_d <= tpad; tvis_d <= tvis; end
                 3'd2: begin
-                    pr_dd <= pr_d; pc_dd <= pc_d; inr_dd <= inr_d; dov_dd <= dov_d;
-                    q_hi_d <= q_hi; q_lo_d <= q_lo; hl_d <= txt_q[7];
+                    pr_dd <= pr_d; pc_dd <= pc_d; inr_dd <= inr_d; dov_dd <= dov_d; tpad_dd <= tpad_d; tvis_dd <= tvis_d;
+                    q_hi_d <= q_hi; q_lo_d <= q_lo; attr_d <= txt_q[15:8]; fext_d <= fext;
                 end
                 default: begin
-                    if (dov_dd)                           pix565 <= fq[3'd7 - pc_dd[2:0]] ? C_TEXT : g_dim;
-                    else if (s_menu2 && fq[3'd7 - pc_dd[2:0]]) pix565 <= C_TEXT;
-                    else if (s_menu2 && hl_d)             pix565 <= C_ACCENT;
-                    else if (s_menu2)                     pix565 <= g_dim;
-                    else                                  pix565 <= g_in;
+                    if (dov_dd)                     pix565 <= fbit ? C_TEXT : g_dim;
+                    else if (s_menu2 && !tvis_dd)   pix565 <= g_eighth;
+                    else if (s_menu2 && fbit)       pix565 <= pal565(a_fg);
+                    else if (s_menu2)               pix565 <= (a_bg == 4'd0) ? g_dim : (a_bg == 4'd15) ? g_eighth : pal565(a_bg);
+                    else                            pix565 <= g_in;
                     m <= M_SEND;
                 end
             endcase
@@ -364,6 +401,12 @@ always @(posedge clk) begin
             tx_go <= 1; tx_16 <= 1; tx_dc <= 1; tx_data <= pix565;
             p <= p + 1'd1; fcnt <= 0;
             m <= (p == 14'h3FFF) ? M_RAMWR : M_FETCH;
+            if (p[6:0] == 7'd127) begin                 // next pixel row
+                if (p[13:7] == 7'd3)        begin tvis <= 1; ty <= 0; trow <= 0; end
+                else if (p[13:7] == 7'd123) tvis <= 0;
+                else if (ty == 4'd9)        begin ty <= 0; trow <= trow + 1'd1; end
+                else                        ty <= ty + 1'd1;
+            end
         end
         default: m <= M_RST_LO;
     endcase

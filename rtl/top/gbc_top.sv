@@ -35,6 +35,12 @@ module gbc_top (
 
     output            ws2812,       // on-board RGB LED, kept dark
 
+    // external W25Qxx SPI flash: a game "cartridge" written from the SD card
+    output            cart_cs_n,
+    output            cart_clk,
+    output            cart_mosi,
+    input             cart_miso,
+
     // buzzer / small speaker: 1-bit sigma-delta audio, spk_n is the inverted signal
     // (piezo between the two pins, or one pin through a transistor / RC filter)
     output            spk_p,
@@ -147,7 +153,7 @@ wire        osd_we, txt_we;
 wire  [9:0] osd_waddr;
 wire [15:0] osd_wdata;
 wire  [8:0] txt_waddr;
-wire  [7:0] txt_wdata;
+wire [15:0] txt_wdata;
 wire        sdram_ready;
 wire        rv_req, rv_ack, rv_we, rv_rvalid;
 wire [20:0] rv_addr;
@@ -178,6 +184,7 @@ iosys #(.CLK_HZ(33_750_000)) u_io (
     .rv_be(rv_be), .rv_rdata(lp_rdata), .rv_rvalid(rv_rvalid),
     .flash_cs_n(flash_cs_n), .flash_clk(flash_clk), .flash_mosi(flash_mosi), .flash_miso(flash_miso),
     .sd_cs_n(sd_dat3), .sd_clk(sd_clk), .sd_mosi(sd_cmd), .sd_miso(sd_dat0),
+    .cart_cs_n(cart_cs_n), .cart_clk(cart_clk), .cart_mosi(cart_mosi), .cart_miso(cart_miso),
     .uart_tx(uart_tx),
     .inputs({uart_reset, uart_menu, s2_s[1], s1_s[1], pad_arm}),
     .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .cram_wr(cram_wr & ~gb_reset),
@@ -204,7 +211,7 @@ wire       lcd_off    = ctrl[8];
 wire       led_en     = ctrl[9];
 // cfg: [1:0] display mode  [4:2] DMG palette  [5] raw GBC colours  [6] LCD crop
 //      [7] debug lines  [11:8] LCD backlight (0..15)  [14:12] volume (0..4)  [15] swap A/B
-//      [16] speaker on
+//      [16] speaker on  [18:17] speaker boost (x1, x2, x4, x8)
 wire [1:0] disp_mode = cfg[1:0];
 wire [2:0] dmg_pal   = cfg[4:2];
 wire       gbc_raw   = cfg[5];
@@ -214,6 +221,7 @@ wire [3:0] lcd_bri   = cfg[11:8];
 wire [2:0] volume    = cfg[14:12];
 wire       swap_ab   = cfg[15];
 wire       spk_en    = cfg[16];
+wire [1:0] spk_boost = cfg[18:17];
 
 wire [11:0] game_btn0 = menu_dim ? 12'd0 : pad_arm;
 // swap A/B: {.. X A ..} bits 9/8 and {Y B} bits 1/0
@@ -370,7 +378,7 @@ fb_writer #(.FB_BASE_W(FB_BASE_W)) u_fbw (
 
 // ================================================================ SPI LCD
 wire [8:0] lcd_txt_a;
-reg  [7:0] lcd_txt_q;
+reg [15:0] lcd_txt_q;
 wire lcd_bl_core;
 lcd_st7735 #(.CLK_HZ(33_750_000)) u_lcd (
     .clk(clk_sys), .reset(sys_rst | lcd_off),
@@ -407,8 +415,8 @@ always @(posedge clk_p) osd_q <= osd_ram[osd_raddr];
 
 // ================================================================ debug / LCD text RAM
 // port A (clk_sys): menu writes, SPI LCD reads in between; port B (clk_p): HDMI reads
-reg [7:0] txt_ram [0:511];
-reg [7:0] txt_q;
+reg [15:0] txt_ram [0:511];
+reg [15:0] txt_q;
 wire [8:0] txt_raddr;
 wire [8:0] txt_a = txt_we ? txt_waddr : lcd_txt_a;
 always @(posedge clk_sys) begin
@@ -425,12 +433,28 @@ audio_out u_audio (
     .in_l(audio_l), .in_r(audio_r), .volume(volume),
     .clk_audio(clk_audio), .out_l(aud_l), .out_r(aud_r)
 );
-// speaker: first-order sigma-delta of the mono mix at clk_sys; pins idle low when off
+// speaker: the Game Boy channels are unipolar, so the mix carries a large DC level.
+// Remove it (one-pole high-pass, ~7 Hz), boost x1..x8 with saturation, then a
+// first-order sigma-delta at clk_sys. Pins idle low when off.
+reg               clk_audio_d;
+reg signed [16:0] spk_x;                        // mono mix
+reg signed [26:0] spk_dc;                       // DC estimate << 10
+reg signed [15:0] spk_s;                        // boosted sample
+wire signed [16:0] spk_mono = {aud_l[15], aud_l} + {aud_r[15], aud_r};
+wire signed [17:0] spk_ac   = spk_x - (spk_dc >>> 10);
+wire signed [20:0] spk_g    = spk_ac <<< spk_boost;
+always @(posedge clk_sys) begin
+    clk_audio_d <= clk_audio;
+    if (clk_audio_d & ~clk_audio) begin          // a new 48 kHz sample was just output
+        spk_x  <= spk_mono;
+        spk_dc <= spk_dc + (({{10{spk_mono[16]}}, spk_mono} <<< 10) - spk_dc >>> 10);
+        spk_s  <= (spk_g > 21'sd65534) ? 16'sh7FFF : (spk_g < -21'sd65534) ? -16'sh7FFF : spk_g[16:1];
+    end
+end
 reg [16:0] spk_acc;
 reg        spk_q;
-wire [16:0] spk_mono = {aud_l[15], aud_l} + {aud_r[15], aud_r};
 always @(posedge clk_sys) begin
-    spk_acc <= {1'b0, spk_acc[15:0]} + {1'b0, ~spk_mono[16], spk_mono[15:1]};
+    spk_acc <= {1'b0, spk_acc[15:0]} + {1'b0, ~spk_s[15], spk_s[14:0]};
     spk_q   <= spk_en & spk_acc[16];
 end
 assign spk_p = spk_q;
@@ -496,7 +520,7 @@ video_out #(.P480(P480)) u_video (
     .clk(clk_p), .cx(cx), .cy(cy), .rgb(rgb),
     .line_req_tgl(line_req_tgl), .line_req_no(line_req_no), .vs_tgl(vs_tgl),
     .lb_addr(lb_raddr), .lb_q(lb_q),
-    .txt_addr(txt_raddr), .txt_q(txt_q),
+    .txt_addr(txt_raddr), .txt_q(txt_q[7:0]),
     .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .disp_mode(disp_mode),
     .osd_addr(osd_raddr), .osd_q(osd_q),
     .scale4(1'b0), .menu_open(menu_open), .osd_dim(menu_dim), .dbg_on(dbg_on),

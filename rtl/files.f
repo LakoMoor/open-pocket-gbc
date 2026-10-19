@@ -49,6 +49,7 @@ rtl/sys/fb_writer.sv
 rtl/sys/memsys.sv
 rtl/rv/femtorv32_quark.v
 rtl/sys/spi_byte.sv
+rtl/sys/spi_port.sv
 rtl/sys/iosys.sv
 rtl/sys/audio_out.sv
 rtl/video/gb_color.sv

@@ -14,6 +14,9 @@
 #define FL_DATA     IO(0x20)
 #define FL_WORD     IO(0x24)
 #define FL_CTRL     IO(0x28)
+#define CT_DATA     IO(0x50)   // external W25Qxx "cartridge" flash
+#define CT_WORD     IO(0x54)
+#define CT_CTRL     IO(0x58)
 #define UART_TX     IO(0x30)
 #define REG_WAIT    IO(0x34)   // write: timeout in ms; read: sleep until an input changes or timeout
 #define REG_CTRL    IO(0x38)
@@ -22,7 +25,7 @@
 #define IOCTL_DATA  IO(0x44)
 
 #define OSD_RAM     ((volatile uint16_t *)0x03000000u)
-#define LCD_TXT     ((volatile uint8_t *)0x03100000u)
+#define LCD_TXT     ((volatile uint16_t *)0x03100000u)   // {attr, char}
 
 // REG_IN
 #define K_B      (1u << 0)

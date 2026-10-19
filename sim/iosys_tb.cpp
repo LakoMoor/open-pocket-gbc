@@ -13,9 +13,10 @@
 double sc_time_stamp() { return 0; }
 
 static std::vector<uint8_t> flash(8 << 20, 0xFF);
+static std::vector<uint8_t> cartmem(8 << 20, 0xFF);   // external W25Q64
 static std::vector<uint8_t> sdram(8 << 20, 0);
 static uint16_t osd[1024];
-static uint8_t txt[512];
+static uint16_t txt[512];
 
 static void load(const char *path, uint32_t at) {
     FILE *f = fopen(path, "rb");
@@ -27,6 +28,8 @@ static void load(const char *path, uint32_t at) {
 
 // SPI flash slave, mode 0
 struct Flash {
+    std::vector<uint8_t> *mem = &flash;
+    uint8_t id_cap = 0x17;
     int bit = 0, nbytes = 0;
     uint8_t in = 0, out = 0xFF, cmd = 0;
     uint32_t addr = 0;
@@ -56,19 +59,20 @@ struct Flash {
     }
     void byte(uint8_t b) {
         if (nbytes == 0) cmd = b;
-        else if (nbytes <= 3 && (cmd == 0x03 || cmd == 0x02 || cmd == 0x20)) addr = (addr << 8) | b;
+        else if (nbytes <= 3 && (cmd == 0x03 || cmd == 0x02 || cmd == 0x20 || cmd == 0xD8)) addr = (addr << 8) | b;
         else if (cmd == 0x02) page.push_back(b);
         nbytes++;
         uint8_t nx = 0xFF;
-        if (cmd == 0x03 && nbytes >= 4) nx = flash[(addr + (nbytes - 4)) & 0x7FFFFF];
-        if (cmd == 0x9F) nx = nbytes == 1 ? 0x85 : nbytes == 2 ? 0x60 : 0x17;
+        if (cmd == 0x03 && nbytes >= 4) nx = (*mem)[(addr + (nbytes - 4)) & 0x7FFFFF];
+        if (cmd == 0x9F) nx = nbytes == 1 ? 0xEF : nbytes == 2 ? 0x40 : id_cap;
         if (cmd == 0x05) nx = 0x00;
         if (cmd == 0x06) wel = true;
         out = nx;                              // presented from the next falling edge
     }
     void end() {
-        if (cmd == 0x20 && wel) { for (int i = 0; i < 4096; i++) flash[(addr & ~0xFFF) + i] = 0xFF; wel = false; }
-        if (cmd == 0x02 && wel) { for (size_t i = 0; i < page.size(); i++) flash[addr + i] &= page[i]; wel = false; }
+        if (cmd == 0x20 && wel) { for (int i = 0; i < 4096; i++) (*mem)[(addr & ~0xFFF) + i] = 0xFF; wel = false; }
+        if (cmd == 0xD8 && wel) { for (int i = 0; i < 65536; i++) (*mem)[(addr & ~0xFFFF) + i] = 0xFF; wel = false; }
+        if (cmd == 0x02 && wel) { for (size_t i = 0; i < page.size(); i++) (*mem)[addr + i] &= page[i]; wel = false; }
         page.clear();
     }
 };
@@ -87,8 +91,11 @@ int main(int argc, char **argv) {
     load("build/games.bin", 0x200000);
 
     Viosys *m = new Viosys;
-    Flash fl;
-    m->reset = 1; m->sdram_ready = 0; m->inputs = 0; m->flash_miso = 1; m->sd_miso = 1;
+    Flash fl, ct;
+    ct.mem = &cartmem;
+    const char *cimg = getenv("CART");
+    if (cimg) { FILE *f = fopen(cimg, "rb"); if (f) { fread(&cartmem[0], 1, cartmem.size(), f); fclose(f); } }
+    m->reset = 1; m->sdram_ready = 0; m->inputs = 0; m->flash_miso = 1; m->sd_miso = 1; m->cart_miso = 1;
     // SDRAM port model: ack one cycle after req, read data 4 cycles later
     int busy = 0, rd_delay = 0;
     uint32_t rd_data = 0;
@@ -123,6 +130,8 @@ int main(int argc, char **argv) {
         m->clk = 1; m->eval();
         fl.step(m->flash_cs_n, m->flash_clk, m->flash_mosi);
         m->flash_miso = fl.miso;
+        if (getenv("NOCART")) m->cart_miso = 1;
+        else { ct.step(m->cart_cs_n, m->cart_clk, m->cart_mosi); m->cart_miso = ct.miso; }
         if (m->osd_we) osd[m->osd_addr & 1023] = m->osd_data;
         if (m->txt_we) txt[m->txt_addr & 511] = m->txt_data;
         // UART
@@ -141,8 +150,8 @@ int main(int argc, char **argv) {
         putchar('\n');
     }
     printf("---- LCD ----\n");
-    for (int y = 0; y < 16; y++) {
-        for (int x = 0; x < 16; x++) { uint8_t c = txt[y * 16 + x] & 0x7F; putchar(c >= 32 && c < 127 ? c : '#'); }
+    for (int y = 0; y < 12; y++) {
+        for (int x = 0; x < 16; x++) { uint8_t c = txt[y * 16 + x] & 0x7F; putchar(c >= 32 && c < 127 ? c : (c == 0 ? ' ' : '#')); }
         putchar('\n');
     }
     delete m;

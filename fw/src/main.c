@@ -15,7 +15,10 @@
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
-#define SET_MAGIC       0x3153504Fu     // "OPS1"
+#define SET_MAGIC       0x3253504Fu     // "OPS2"
+#define SET_MAGIC_V1    0x3153504Fu     // "OPS1": no speaker boost yet
+#define CART_MAGIC      0x3143504Fu     // "OPC1"
+#define CART_ROM        0x10000u        // ROM offset in the cartridge flash
 
 // ================================================================ settings
 typedef struct {
@@ -24,7 +27,7 @@ typedef struct {
     uint8_t  dbg_on, lcd_bri, volume, swap_ab;
     uint8_t  sys_mode, hdmi_off, lcd_off, led_en;
     uint8_t  autosave, toasts, boot_menu, sleep_min;
-    uint8_t  last_src, last_flash, speaker, rsv;
+    uint8_t  last_src, last_flash, speaker, spk_boost;
     char     last_path[228];
     uint32_t sum;
 } settings_t;
@@ -49,6 +52,7 @@ static void set_defaults(void) {
     set.volume = 4;
     set.autosave = 1;
     set.toasts = 1;
+    set.spk_boost = 2;      // x4
 }
 
 static void settings_save(void) {
@@ -74,7 +78,7 @@ static void apply_settings(void) {
     REG_CFG = (set.disp_mode & 3) | ((set.dmg_pal & 7) << 2) | ((set.gbc_raw & 1) << 5) |
               ((set.lcd_crop & 1) << 6) | ((set.dbg_on & 1) << 7) |
               ((uint32_t)bri_duty[set.lcd_bri & 3] << 8) | ((uint32_t)(set.volume & 7) << 12) |
-              ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16);
+              ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16) | ((uint32_t)(set.spk_boost & 3) << 17);
     ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED);
     ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off ? C_HDMI_OFF : 0) |
             (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED : 0);
@@ -105,6 +109,33 @@ static void flash_dir_read(void) {
     fl_count = hdr[1] > 15 ? 15 : hdr[1];
     flash_read(GAMES_BASE + 16, fl_dir, fl_count * sizeof(fl_entry_t));
     for (int i = 0; i < fl_count; i++) fl_dir[i].name[23] = 0;
+}
+
+// ================================================================ cartridge (external W25Qxx)
+// layout: 0x000000 header sector, 0x010000 ROM, size - 0x21000 save header sector,
+// size - 0x20000 save data (up to 128 KB)
+typedef struct { uint32_t magic, rom_size, rsv[2]; char name[48]; } cart_hdr_t;
+static uint32_t   cart_id, cart_size;
+static cart_hdr_t cart;
+static int        cart_valid;
+
+static uint32_t cart_save_addr(void) { return cart_size - 0x21000; }
+static uint32_t cart_rom_max(void) { return cart_size > 0x41000 ? cart_size - 0x21000 - CART_ROM : 0; }
+
+static void cart_probe(void) {
+    flash_select(1);
+    flash_init();
+    cart_id = flash_id();
+    cart_size = flash_size(cart_id);
+    cart_valid = 0;
+    if (cart_size) {
+        flash_read(0, &cart, sizeof cart);
+        cart.name[47] = 0;
+        cart_valid = cart.magic == CART_MAGIC && cart.rom_size >= 0x8000 && cart.rom_size <= cart_rom_max();
+        flash_sleep();
+    }
+    flash_select(0);
+    logf("cart: id %06x, %u KB, %s\n", cart_id, cart_size >> 10, cart_valid ? cart.name : "no game");
 }
 
 // ================================================================ game state
@@ -181,6 +212,14 @@ static void toast(const char *msg, uint8_t icon, uint8_t colour) {
     toast_until = ms_now() + 1600;
 }
 
+// LCD: navy title bar on the top row, the rest cleared
+static void lcd_header(const char *title) {
+    lcd_clear(AT(CL_WHITE, CL_SHADE));
+    for (int x = 0; x < LCD_W; x++) lcd_put(x, 0, ' ', AT(CL_WHITE, CL_NAVY));
+    lcd_put(0, 0, G_STAR, AT(CL_BLUE, CL_NAVY));
+    lcd_text(2, 0, title, AT(CL_WHITE, CL_NAVY));
+}
+
 static void progress_screen(const char *title, const char *name, uint32_t done, uint32_t total) {
     osd_clear(AT(CL_WHITE, CL_SHADE));
     osd_text(15, 9, title, AT(CL_GREY, CL_SHADE));
@@ -196,12 +235,16 @@ static void progress_screen(const char *title, const char *name, uint32_t done, 
         osd_fill(7, 13, f, ' ', AT(CL_WHITE, CL_BLUE));
     }
     osd_present();
-    lcd_clear();
-    lcd_text(0, 6, title, 0);
-    lcd_text(0, 8, name, 0);
+    lcd_header(title);
+    lcd_text(0, 4, name, AT(CL_WHITE, CL_SHADE));
+    int lf = total ? (int)((uint64_t)done * 16 / total) : 0;
+    lcd_pill(6, CL_PANEL, CL_SHADE);
+    for (int x = 0; x < lf; x++)
+        lcd_put(x, 6, x == 0 ? (G_PILL_L | EXT) : x == 15 ? (G_PILL_R | EXT) : ' ',
+                x == 0 || x == 15 ? AT(CL_BLUE, CL_SHADE) : AT(CL_WHITE, CL_BLUE));
     char b[17];
     sfmt(b, sizeof b, "%u%%", total ? (unsigned)((uint64_t)done * 100 / total) : 0);
-    lcd_text(0, 10, b, 0);
+    lcd_text(8 - (int)strlen(b) / 2, 8, b, AT(CL_LIGHT, CL_SHADE));
     lcd_present();
 }
 
@@ -210,9 +253,9 @@ static void message_screen(const char *title, const char *line) {
     osd_text(21 - (int)strlen(title) / 2, 10, title, AT(CL_WHITE, CL_SHADE));
     osd_text(21 - (int)strlen(line) / 2, 12, line, AT(CL_GREY, CL_SHADE));
     osd_present();
-    lcd_clear();
-    lcd_text(0, 6, title, 0);
-    lcd_text(0, 8, line, 0);
+    lcd_header(title);
+    lcd_text(0, 5, line, AT(CL_LIGHT, CL_SHADE));
+    if (strlen(line) > 16) lcd_text(0, 6, line + 16, AT(CL_LIGHT, CL_SHADE));
     lcd_present();
 }
 
@@ -226,6 +269,13 @@ static void sav_path(char *out, const char *rom) {
 }
 
 static uint32_t slot_addr(int idx) { return SAVE_BASE + (uint32_t)idx * SAVE_SLOT; }
+
+// flash chip and header address of the save of a flash (1) or cartridge (3) game
+static int save_slot(uint32_t *a) {
+    if (game.src == 1 && flash_saves) { *a = slot_addr(game.flash_idx); return 0; }
+    if (game.src == 3 && cart_size)   { *a = cart_save_addr(); return 1; }
+    return -1;
+}
 
 static void save_load(void) {
     volatile uint8_t *cram = sdram(CRAM_BASE);
@@ -241,13 +291,18 @@ static void save_load(void) {
             f_close(&f);
             logf("save loaded: %s (%u)\n", p, br);
         }
-    } else if (game.src == 1 && flash_saves) {
-        uint32_t h[4];
-        flash_read(slot_addr(game.flash_idx), h, 16);
+    } else {
+        uint32_t a, h[4];
+        int chip = save_slot(&a);
+        if (chip < 0) return;
+        flash_select(chip);
+        flash_read(a, h, 16);
         if (h[0] == 0x31564153u && h[1] == game.save_bytes && h[2] == sum32(game.name, 16)) {
-            flash_read_sdram(slot_addr(game.flash_idx) + 0x1000, CRAM_BASE, game.save_bytes);
-            logf("save loaded from flash slot %d\n", game.flash_idx);
+            flash_read_sdram(a + 0x1000, CRAM_BASE, game.save_bytes);
+            logf("save loaded from %s\n", chip ? "the cartridge" : "the flash");
         }
+        flash_sleep();
+        flash_select(0);
     }
 }
 
@@ -264,14 +319,19 @@ static int save_write(void) {
             f_close(&f);
             ok = (bw == game.save_bytes) ? 0 : -1;
         }
-    } else if (game.src == 1 && flash_saves) {
-        uint32_t h[4] = { 0x31564153u, game.save_bytes, sum32(game.name, 16), 0 }, old[4];
-        int n = flash_update_sdram(slot_addr(game.flash_idx) + 0x1000, CRAM_BASE, game.save_bytes);
-        flash_read(slot_addr(game.flash_idx), old, 16);
-        if (memcmp(old, h, 16)) { flash_write(slot_addr(game.flash_idx), h, 16); n++; }
-        flash_sleep();
-        logf("flash save: %d sectors\n", n);
-        ok = n ? 0 : 1;                         // 1: nothing changed
+    } else {
+        uint32_t a, h[4] = { 0x31564153u, game.save_bytes, sum32(game.name, 16), 0 }, old[4];
+        int chip = save_slot(&a);
+        if (chip >= 0) {
+            flash_select(chip);
+            int n = flash_update_sdram(a + 0x1000, CRAM_BASE, game.save_bytes);
+            flash_read(a, old, 16);
+            if (memcmp(old, h, 16)) { flash_write(a, h, 16); n++; }
+            flash_sleep();
+            flash_select(0);
+            logf("flash save: %d sectors\n", n);
+            ok = n ? 0 : 1;                     // 1: nothing changed
+        }
     }
     game.save_pending = 0;
     if (ok >= 0) { game.saved_ms = ms_now(); game.saved_once = 1; }
@@ -312,7 +372,44 @@ static void name_from_path(const char *p) {
     if (dot && dot != game.name) *dot = 0;
 }
 
-// src 1: flash index, src 2: SD path
+static int cart_write_pending;           // write the loaded SD game to the cartridge
+
+static void cart_progress(uint32_t done, uint32_t total) {
+    progress_screen("Writing cartridge", game.name, done, total);
+}
+
+// writes the ROM in SDRAM to the cartridge flash
+static int cart_write_rom(void) {
+    if (!cart_size) { message_screen("No cartridge flash", "CS 51 CLK 48 DI 55 DO 49"); wait_ms(2000); return -1; }
+    if (game.rom_bytes > cart_rom_max()) { message_screen("Cartridge too small", game.name); wait_ms(2000); return -1; }
+    cart_hdr_t h;
+    memset(&h, 0, sizeof h);
+    flash_select(1);
+    flash_init();
+    flash_erase_range(0, 4096);                         // invalid until the ROM is complete
+    flash_write_big(CART_ROM, ROM_BASE, game.rom_bytes, cart_progress);
+    flash_erase_range(cart_save_addr(), 4096);          // drop the previous game's save
+    h.magic = CART_MAGIC;
+    h.rom_size = game.rom_bytes;
+    strncpy(h.name, game.name, 47);
+    flash_write(0, &h, sizeof h);
+    // spot check: first and last 4 bytes of every 64 KB block
+    int bad = 0;
+    for (uint32_t o = 0; o < game.rom_bytes && !bad; o += 0x10000) {
+        uint32_t v;
+        flash_read(CART_ROM + o, &v, 4);
+        if (v != *(volatile uint32_t *)sdram(ROM_BASE + o)) bad = 1;
+    }
+    flash_sleep();
+    flash_select(0);
+    if (bad) { message_screen("Cartridge write failed", "check the wiring"); wait_ms(2000); return -1; }
+    cart = h;
+    cart_valid = 1;
+    logf("cartridge written: %s, %u bytes\n", h.name, h.rom_size);
+    return 0;
+}
+
+// src 1: flash index, src 2: SD path, src 3: cartridge
 static int load_game(int src, int idx, const char *path) {
     if (game.loaded && game.save_pending) save_write();
     // the core only resets while its clock enables run, so no pause during reset
@@ -323,6 +420,7 @@ static int load_game(int src, int idx, const char *path) {
     const char *nm = src == 1 ? fl_dir[idx].name : path;
     char shown[48];
     if (src == 1) strcpy(shown, fl_dir[idx].name);
+    else if (src == 3) strcpy(shown, cart.name);
     else { const char *b = strrchr(path, '/'); strncpy(shown, b ? b + 1 : path, 47); shown[47] = 0; }
     (void)nm;
 
@@ -334,6 +432,17 @@ static int load_game(int src, int idx, const char *path) {
             uint32_t n = size - o < 0x10000 ? size - o : 0x10000;
             flash_read_sdram(GAMES_BASE + fl_dir[idx].ofs + o, ROM_BASE + o, n);
         }
+    } else if (src == 3) {
+        if (!cart_valid) { message_screen("No game on the cartridge", ""); ctrl_bits(C_DOWNLOAD, 0); wait_ms(1500); return -1; }
+        size = cart.rom_size;
+        flash_select(1);
+        for (uint32_t o = 0; o < size; o += 0x10000) {
+            progress_screen("Loading cartridge", shown, o, size);
+            uint32_t n = size - o < 0x10000 ? size - o : 0x10000;
+            flash_read_sdram(CART_ROM + o, ROM_BASE + o, n);
+        }
+        flash_sleep();
+        flash_select(0);
     } else {
         FIL f;
         if (!sd_mounted || f_open(&f, path, FA_READ) != FR_OK) {
@@ -371,6 +480,7 @@ static int load_game(int src, int idx, const char *path) {
     game.src = src;
     game.flash_idx = idx;
     if (src == 2) { strncpy(game.path, path, 255); name_from_path(path); }
+    else if (src == 3) strcpy(game.name, cart.name);
     else strcpy(game.name, fl_dir[idx].name);
     if (!game.name[0]) title_from_header();
     game.rom_bytes = size;
@@ -384,10 +494,16 @@ static int load_game(int src, int idx, const char *path) {
 
     feed_header(size);
     save_load();
+    int copy_save = 0;
+    if (cart_write_pending) {
+        cart_write_pending = 0;
+        if (cart_write_rom() == 0) { game.src = src = 3; copy_save = 1; }
+    }
     ctrl_bits(C_DOWNLOAD, 0);
     wait_ms(2);
     ctrl_bits(C_CORE_RST, 0);
     game.loaded = 1;
+    if (copy_save && game.battery && game.save_bytes) save_write();    // the SD save goes along
 
     set.last_src = src;
     set.last_flash = idx;
@@ -464,13 +580,15 @@ static const uint16_t sleep_minutes[4] = { 0, 5, 15, 30 };
 
 // ================================================================ menu model
 enum {
-    P_MAIN, P_LIBRARY, P_BROWSER, P_DISPLAY, P_AUDIO, P_CONTROLS, P_SYSTEM, P_INFO
+    P_MAIN, P_LIBRARY, P_BROWSER, P_DISPLAY, P_AUDIO, P_CONTROLS, P_SYSTEM, P_INFO,
+    P_CART, P_FILEACT
 };
 enum {
     I_NONE, I_RESUME, I_LIBRARY, I_SAVE, I_RESET, I_PG_DISPLAY, I_PG_AUDIO, I_PG_CONTROLS,
     I_PG_SYSTEM, I_PG_INFO, I_SLEEP_NOW,
     I_SRC_SD, I_SRC_FLASH, I_FLASH_GAME, I_FILE, I_DIR, I_UP,
-    I_OPT, I_DEFAULTS, I_INFO
+    I_OPT, I_DEFAULTS, I_INFO,
+    I_SRC_CART, I_PLAY_CART, I_ERASE_CART, I_PLAY_SD, I_WRITE_CART
 };
 
 typedef struct {
@@ -501,6 +619,7 @@ static const char *const o_vol[]   = { "Mute", "25%", "50%", "75%", "100%" };
 static const char *const o_sys[]   = { "Auto", "Game Boy Color", "Game Boy" };
 static const char *const o_boot[]  = { "Last Game", "Menu" };
 static const char *const o_sleep[] = { "Off", "5 min", "15 min", "30 min" };
+static const char *const o_boost[] = { "x1", "x2", "x4", "x8" };
 
 static item_t *add(uint8_t id, uint8_t icon, const char *label, const char *desc) {
     if (nitems >= MAX_ITEMS) return &items[MAX_ITEMS - 1];
@@ -523,6 +642,8 @@ static void add_info(const char *label, const char *fmt, ...) {
 
 // ---------------------------------------------------------------- SD browser
 static char cur_dir[256] = "/";
+static char act_path[260];              // file chosen in the SD browser
+static int  br_cursor, br_scroll;
 static char name_pool[48 * 1024];
 static int  pool_used;
 
@@ -602,6 +723,35 @@ static void build_page(void) {
         strcpy(it->value, sd_mounted ? "Ready" : "No card");
         it = add(I_SRC_FLASH, G_FLASH, "Internal Flash", "Games written with make_games.py. Saves stay in the flash.");
         sfmt(it->value, sizeof it->value, "%d games", fl_count);
+        it = add(I_SRC_CART, G_CART, "Cartridge", "External W25Q flash: play the game written to it from the SD card.");
+        strncpy(it->value, cart_valid ? cart.name : cart_size ? "Empty" : "Not found", 22);
+        break;
+    }
+    case P_CART: {
+        strcpy(page_title, "Cartridge");
+        if (cart_valid) {
+            item_t *it = add(I_PLAY_CART, G_PLAY, "Play", "Load the game from the cartridge. Saves are kept on it.");
+            strncpy(it->value, cart.name, 24);
+        }
+        if (cart_size) {
+            add_info("Chip", "%06x, %u MB", cart_id, cart_size >> 20 ? cart_size >> 20 : 1);
+            if (cart_valid) {
+                add_info("ROM", "%u KB", cart.rom_size >> 10);
+                add_info("Room for", "%u KB ROM", cart_rom_max() >> 10);
+            } else add_info("Game", "none (write from SD)");
+            add(I_ERASE_CART, G_RESET, "Erase Cartridge", "Remove the game and its save from the cartridge flash.");
+        } else {
+            add_info("Status", "no chip found");
+            add_info("Wiring", "CS51 CLK48 DI55 DO49");
+            add_info("", "WP, HOLD, VCC to 3V3");
+        }
+        break;
+    }
+    case P_FILEACT: {
+        item_t *it = add(I_PLAY_SD, G_PLAY, "Play", "Load the game from the SD card. The save is <name>.sav next to it.");
+        (void)it;
+        it = add(I_WRITE_CART, G_CART, "Write to Cartridge", "Copy the game and its save to the W25Q flash, then play it from there.");
+        strncpy(it->value, cart_size ? (cart_valid ? "replaces game" : "empty") : "no chip", 22);
         break;
     }
     case P_BROWSER:
@@ -629,6 +779,7 @@ static void build_page(void) {
         strcpy(page_title, "Audio");
         add_opt(G_AUDIO, "Volume", "Volume for HDMI audio and the speaker.", &set.volume, 5, o_vol);
         add_opt(G_AUDIO, "Speaker", "Buzzer or small speaker on pins 76 / 75 (sigma-delta audio).", &set.speaker, 2, o_offon);
+        add_opt(G_AUDIO, "Speaker Boost", "Extra gain for the speaker. Too high clips loud sounds.", &set.spk_boost, 4, o_boost);
         break;
     case P_CONTROLS:
         strcpy(page_title, "Controls");
@@ -658,11 +809,13 @@ static void build_page(void) {
             add_info("ROM", "%u KB", game.rom_bytes >> 10);
             if (game.save_bytes) add_info("Save RAM", "%u KB%s", game.save_bytes >> 10 ? game.save_bytes >> 10 : 1, game.battery ? "" : " (not kept)");
             add_info("Running as", "%s%s", (st & 1) ? "Game Boy Color" : "Game Boy", (st & 2) ? " 2x" : "");
-            add_info("Source", "%s", game.src == 2 ? "SD card" : "Internal flash");
+            add_info("Source", "%s", game.src == 2 ? "SD card" : game.src == 3 ? "Cartridge" : "Internal flash");
         } else add_info("Game", "none loaded");
         if (sd_mounted) add_info("SD card", "%u MB", sd_sectors() / 2048);
         else add_info("SD card", "not found");
         add_info("Flash", "%06x, %d games", flash_id(), fl_count);
+        if (cart_size) add_info("Cartridge", "%u MB%s%s", cart_size >> 20 ? cart_size >> 20 : 1, cart_valid ? ", " : "", cart_valid ? cart.name : "");
+        else add_info("Cartridge", "not connected");
         uint32_t s = ms_now() / 1000;
         add_info("Uptime", "%u:%02u:%02u", s / 3600, (s / 60) % 60, s % 60);
         add_info("Firmware", "Open Pocket GBC " FW_VERSION);
@@ -769,17 +922,39 @@ static void draw_menu(void) {
     if (page == P_MAIN && game.loaded) hint(fx, 22, "START", "Resume", bg);
     osd_present();
 
-    // SPI LCD: title + 14 rows
-    lcd_clear();
-    lcd_text(0, 0, page == P_MAIN ? "Open Pocket" : page_title, 0);
-    int lscroll = cursor > 13 ? cursor - 13 : 0;
-    for (int r = 0; r < 14 && lscroll + r < nitems; r++) {
-        item_t *it = &items[lscroll + r];
+    // SPI LCD: title bar, 10 list rows, value / hint row
+    const char *lt = page == P_MAIN ? "Open Pocket" : page == P_BROWSER ? (page_title[0] == 'I' ? "Flash" : "SD Card") : page_title;
+    lcd_header(lt);
+    int lrows = 10, ls = 0;
+    if (cursor >= lrows) ls = cursor - lrows + 1;
+    for (int r = 0; r < lrows && ls + r < nitems; r++) {
+        item_t *it = &items[ls + r];
+        int y = 1 + r, sel = (ls + r == cursor) && selectable(ls + r);
+        uint8_t tb = sel ? CL_WHITE : CL_SHADE;
         char b[17];
-        if (it->id == I_OPT) sfmt(b, sizeof b, "%-8s%s", it->label, it->opts[*it->val]);
-        else if (it->id == I_INFO) sfmt(b, sizeof b, "%s", it->value);
-        else sfmt(b, sizeof b, "%s", it->label);
-        lcd_text(0, 2 + r, b, lscroll + r == cursor);
+        if (sel) lcd_pill(y, CL_WHITE, CL_SHADE);
+        if (it->id == I_INFO) {
+            sfmt(b, 16, "%s", it->value);
+            lcd_text(1, y, b, AT(CL_LIGHT, tb));
+            continue;
+        }
+        if (it->icon) lcd_put(1, y, it->icon, AT(sel ? CL_BLUE : CL_GREY, tb));
+        sfmt(b, 13, "%s", it->label);
+        lcd_text(3, y, b, AT(sel ? CL_BLACK : CL_WHITE, tb));
+    }
+    if (nitems > lrows) {                       // scroll position on the right edge
+        int ty = 1 + (lrows - 1) * ls / (nitems - lrows);
+        if (!(cursor - ls == ty - 1)) lcd_put(15, ty, G_THUMB | EXT, AT(CL_LIGHT, CL_SHADE));
+    }
+    if (cursor < nitems) {
+        item_t *it = &items[cursor];
+        char b[24];
+        uint8_t at = AT(CL_GREY, CL_SHADE);
+        if (it->id == I_OPT) { sfmt(b, sizeof b, "%c %s %c", G_CHEV_L, it->opts[*it->val], G_CHEV_R); at = AT(CL_YELLOW, CL_SHADE); }
+        else if (it->value[0] && it->id != I_INFO) sfmt(b, sizeof b, "%s", it->value);
+        else sfmt(b, sizeof b, "A ok  B back");
+        b[16] = 0;
+        lcd_text(8 - (int)strlen(b) / 2, 11, b, at);
     }
     lcd_present();
 }
@@ -846,14 +1021,46 @@ static int activate(item_t *it, int dir) {
         break;
     }
     case I_FILE: {
-        char p[260];
         int n = (int)strlen(cur_dir);
-        sfmt(p, sizeof p, "%s%s%s", cur_dir, cur_dir[n - 1] == '/' ? "" : "/", it->label);
-        if (load_game(2, 0, p) == 0) return 1;
-        osd_invalidate();
-        go(P_BROWSER, 1);
+        sfmt(act_path, sizeof act_path, "%s%s%s", cur_dir, cur_dir[n - 1] == '/' ? "" : "/", it->label);
+        strncpy(page_title, it->label, sizeof page_title - 1);
+        page_title[sizeof page_title - 1] = 0;
+        br_cursor = cursor;
+        br_scroll = scroll;
+        cart_probe();
+        go(P_FILEACT, 0);
         break;
     }
+    case I_PLAY_SD:
+    case I_WRITE_CART:
+        cart_write_pending = (it->id == I_WRITE_CART);
+        if (load_game(2, 0, act_path) == 0) return 1;
+        cart_write_pending = 0;
+        osd_invalidate();
+        go(P_FILEACT, 1);
+        break;
+    case I_SRC_CART:
+        message_screen("Reading cartridge", "");
+        cart_probe();
+        go(P_CART, 0);
+        break;
+    case I_PLAY_CART:
+        if (load_game(3, 0, 0) == 0) return 1;
+        osd_invalidate();
+        go(P_CART, 1);
+        break;
+    case I_ERASE_CART:
+        message_screen("Erasing cartridge", "");
+        flash_select(1);
+        flash_init();
+        flash_erase_range(0, 4096);
+        if (cart_size) flash_erase_range(cart_save_addr(), 4096);
+        flash_sleep();
+        flash_select(0);
+        cart_probe();
+        if (game.loaded && game.src == 3) game.battery = 0;    // nowhere to save any more
+        go(P_CART, 0);
+        break;
     case I_FLASH_GAME:
         if (load_game(1, it->arg, 0) == 0) return 1;
         go(P_BROWSER, 1);
@@ -890,6 +1097,13 @@ static void back(void) {
         } else { go(P_LIBRARY, 0); cursor = page_title[0] == 'I' ? 1 : 0; }
         break;
     case P_LIBRARY: go(P_MAIN, 0); cursor = game.loaded ? 1 : 0; break;
+    case P_CART: go(P_LIBRARY, 0); cursor = 2; break;
+    case P_FILEACT:
+        page_title[0] = 'S';
+        go(P_BROWSER, 0);
+        cursor = br_cursor < nitems ? br_cursor : 0;
+        scroll = br_scroll;
+        break;
     default: {
         int from = page;
         go(P_MAIN, 0);
@@ -961,7 +1175,7 @@ static unsigned fps;
 static void dbg_line(int line, const char *s) {
     for (int i = 0; i < 42; i++) {
         char c = *s ? *s++ : ' ';
-        LCD_TXT[256 + 64 * line + i] = (uint8_t)c;
+        LCD_TXT[256 + 64 * line + i] = ((uint16_t)AT(CL_WHITE, CL_GAME) << 8) | (uint8_t)c;
     }
 }
 
@@ -1007,20 +1221,25 @@ int main(void) {
     if (set_addr) {
         settings_t t;
         flash_read(set_addr, &t, sizeof t);
-        if (t.magic == SET_MAGIC && t.sum == sum32(&t, sizeof t - 4)) set = t;
+        if (t.sum == sum32(&t, sizeof t - 4)) {
+            if (t.magic == SET_MAGIC) set = t;
+            else if (t.magic == SET_MAGIC_V1) { set = t; set.magic = SET_MAGIC; set.spk_boost = 2; }
+        }
         set_stored = set;
     }
     apply_settings();
     flash_dir_read();
     logf("flash games: %d\n", fl_count);
     sd_mount();
-    lcd_clear();
+    cart_probe();
+    lcd_clear(AT(CL_WHITE, CL_SHADE));
     lcd_present();
     osd_invalidate();
 
     int started = 0;
     if (!set.boot_menu) {
         if (set.last_src == 2 && sd_mounted && set.last_path[0]) started = load_game(2, 0, set.last_path) == 0;
+        if (!started && set.last_src == 3 && cart_valid) started = load_game(3, 0, 0) == 0;
         if (!started && set.last_src == 1 && set.last_flash < fl_count) started = load_game(1, set.last_flash, 0) == 0;
         if (!started && fl_count) started = load_game(1, 0, 0) == 0;
     }

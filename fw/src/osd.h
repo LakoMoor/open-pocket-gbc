@@ -6,6 +6,7 @@
 #define OSD_W 42
 #define OSD_H 24
 #define LCD_W 16
+#define LCD_H 12
 
 // colours (rtl/video/video_out.sv pal16)
 enum {
@@ -25,6 +26,8 @@ void osd_pill(int x, int y, int w, uint8_t fill, uint8_t outside);  // rounded b
 void osd_present(void);
 void osd_invalidate(void);
 
-void lcd_clear(void);
-void lcd_text(int x, int y, const char *s, int hl);
+void lcd_clear(uint8_t attr);
+void lcd_put(int x, int y, uint8_t ch, uint8_t attr);
+int  lcd_text(int x, int y, const char *s, uint8_t attr);   // returns the next x
+void lcd_pill(int y, uint8_t fill, uint8_t outside);
 void lcd_present(void);

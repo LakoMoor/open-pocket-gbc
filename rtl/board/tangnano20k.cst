@@ -114,3 +114,13 @@ IO_LOC  "spk_p" 76;
 IO_PORT "spk_p" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC  "spk_n" 75;
 IO_PORT "spk_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// external W25Qxx flash ("cartridge"); WP and HOLD of the chip go to 3V3
+IO_LOC  "cart_cs_n" 51;
+IO_PORT "cart_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "cart_clk" 48;
+IO_PORT "cart_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "cart_mosi" 55;
+IO_PORT "cart_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "cart_miso" 49;
+IO_PORT "cart_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;

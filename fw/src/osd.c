@@ -3,7 +3,7 @@
 
 static uint16_t back[OSD_W * OSD_H];
 static uint16_t front[OSD_W * OSD_H];
-static uint8_t  lback[256], lfront[256];
+static uint16_t lback[LCD_W * LCD_H], lfront[LCD_W * LCD_H];
 static int      front_valid, lfront_valid;
 
 void osd_clear(uint8_t attr) {
@@ -55,21 +55,32 @@ void osd_present(void) {
     front_valid = 1;
 }
 
-void lcd_clear(void) {
-    for (int i = 0; i < 256; i++) lback[i] = ' ';
+void lcd_clear(uint8_t attr) {
+    for (int i = 0; i < LCD_W * LCD_H; i++) lback[i] = ((uint16_t)attr << 8) | ' ';
 }
 
-void lcd_text(int x, int y, const char *s, int hl) {
-    if (y < 0 || y >= 16) return;
+void lcd_put(int x, int y, uint8_t ch, uint8_t attr) {
+    if (x < 0 || y < 0 || x >= LCD_W || y >= LCD_H) return;
+    lback[y * LCD_W + x] = ((uint16_t)attr << 8) | ch;
+}
+
+int lcd_text(int x, int y, const char *s, uint8_t attr) {
     while (*s && x < LCD_W) {
         uint8_t c = (uint8_t)*s++;
-        lback[y * 16 + x++] = (c & 0x7F) | (hl ? 0x80 : 0);
+        lcd_put(x++, y, c >= 0x80 ? '?' : c, attr);
     }
-    if (hl) while (x < LCD_W) lback[y * 16 + x++] = 0x80 | ' ';
+    return x;
+}
+
+// full-width rounded bar
+void lcd_pill(int y, uint8_t fill, uint8_t outside) {
+    lcd_put(0, y, G_PILL_L | EXT, AT(fill, outside));
+    for (int x = 1; x < LCD_W - 1; x++) lcd_put(x, y, ' ', AT(CL_BLACK, fill));
+    lcd_put(LCD_W - 1, y, G_PILL_R | EXT, AT(fill, outside));
 }
 
 void lcd_present(void) {
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < LCD_W * LCD_H; i++) {
         if (!lfront_valid || lfront[i] != lback[i]) {
             lfront[i] = lback[i];
             LCD_TXT[i] = lback[i];

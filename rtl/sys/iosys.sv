@@ -7,7 +7,7 @@
 //   0x0100_0000  boot ROM (copies the firmware from flash 0x100000 to SDRAM 0x780000)
 //   0x0200_0000  registers, see below
 //   0x0300_0000  OSD character RAM: 1024 x 16 bit {attr, char}, halfword writes
-//   0x0310_0000  SPI LCD text RAM: 512 x 8 bit, byte writes
+//   0x0310_0000  SPI LCD / debug text RAM: 512 x 16 bit {attr, char}, halfword writes
 //
 // The CPU stalls on a WAIT read until an input changes or the timeout passes, so it does
 // not switch while the game runs.
@@ -38,6 +38,12 @@ module iosys #(
     output            sd_mosi,
     input             sd_miso,
 
+    // external W25Qxx flash used as a game cartridge
+    output            cart_cs_n,
+    output            cart_clk,
+    output            cart_mosi,
+    input             cart_miso,
+
     output            uart_tx,
 
     input      [15:0] inputs,       // {uart reset, uart menu, s2, s1, pad[11:0]}
@@ -58,7 +64,7 @@ module iosys #(
     output reg [15:0] osd_data,
     output reg        txt_we,
     output reg  [8:0] txt_addr,
-    output reg  [7:0] txt_data
+    output reg [15:0] txt_data
 );
 
 // ------------------------------------------------------------ CPU
@@ -133,23 +139,22 @@ end
 `include "bootrom.vh"
 
 // ------------------------------------------------------------ SPI ports
-reg  [7:0] sd_div, fl_div;
-reg        sd_cs, fl_cs;
-reg        sd_start, fl_start;
-reg  [7:0] sd_tx, fl_tx;
-wire [7:0] sd_rx, fl_rx;
-wire       sd_busy, fl_busy;
-spi_byte u_sd (.clk(clk), .reset(reset), .div(sd_div), .start(sd_start), .tx(sd_tx),
-               .rx(sd_rx), .busy(sd_busy), .sck(sd_clk), .mosi(sd_mosi), .miso(sd_miso));
-spi_byte u_fl (.clk(clk), .reset(reset), .div(fl_div), .start(fl_start), .tx(fl_tx),
-               .rx(fl_rx), .busy(fl_busy), .sck(flash_clk), .mosi(flash_mosi), .miso(flash_miso));
-assign sd_cs_n    = ~sd_cs;
-assign flash_cs_n = ~fl_cs;
-
-// word reads: four 0xFF transfers, little endian
-reg  [2:0] sw_n, fw_n;          // transfers left (4..1), 0 idle
-reg [31:0] sw_q, fw_q;
-reg        sw_go, fw_go;        // a word read was started and is running
+// SD at 0x10, on-board flash at 0x20, cartridge flash at 0x50 (DATA, WORD, CTRL)
+wire [5:0] reg_a = mem_addr[7:2];
+wire       sel_sd = is_io && reg_a[5:2] == 4'd1 && reg_a[1:0] != 2'd3;
+wire       sel_fl = is_io && reg_a[5:2] == 4'd2 && reg_a[1:0] != 2'd3;
+wire       sel_ct = is_io && reg_a[5:2] == 4'd5 && reg_a[1:0] != 2'd3;
+wire       sd_ready, fl_ready, ct_ready;
+wire [31:0] sd_rdata, fl_rdata, ct_rdata;
+spi_port #(.DIV0(8'd63)) u_sd (.clk(clk), .reset(reset), .valid(mem_valid & sel_sd), .sel(reg_a[1:0]),
+    .wr(is_wr), .fire(fire & sel_sd), .wdata(mem_wdata), .ready(sd_ready), .rdata(sd_rdata),
+    .cs_n(sd_cs_n), .sck(sd_clk), .mosi(sd_mosi), .miso(sd_miso));
+spi_port #(.DIV0(8'd0)) u_fl (.clk(clk), .reset(reset), .valid(mem_valid & sel_fl), .sel(reg_a[1:0]),
+    .wr(is_wr), .fire(fire & sel_fl), .wdata(mem_wdata), .ready(fl_ready), .rdata(fl_rdata),
+    .cs_n(flash_cs_n), .sck(flash_clk), .mosi(flash_mosi), .miso(flash_miso));
+spi_port #(.DIV0(8'd1)) u_ct (.clk(clk), .reset(reset), .valid(mem_valid & sel_ct), .sel(reg_a[1:0]),
+    .wr(is_wr), .fire(fire & sel_ct), .wdata(mem_wdata), .ready(ct_ready), .rdata(ct_rdata),
+    .cs_n(cart_cs_n), .sck(cart_clk), .mosi(cart_mosi), .miso(cart_miso));
 
 // ------------------------------------------------------------ UART TX (115200 8N1)
 localparam UDIV = CLK_HZ / 115200;
@@ -172,7 +177,6 @@ reg [15:0] frames;
 wire       timeout = (wait_cnt == 0);
 
 // ------------------------------------------------------------ register read / ready
-wire [5:0] reg_a = mem_addr[7:2];
 always @* begin
     mem_ready = 0;
     mem_rdata = 32'd0;
@@ -191,31 +195,21 @@ always @* begin
             6'h01: mem_rdata = {16'd0, in_q};
             6'h02: mem_rdata = ms;
             6'h03: mem_rdata = {frames, 13'd0, dirty, stat_2x, stat_gbc};
-            6'h04: begin mem_ready = ~sd_busy & ~sd_start;              mem_rdata = {24'd0, sd_rx}; end
-            6'h05: begin mem_ready = sw_go & (sw_n == 0) & ~sd_busy; mem_rdata = sw_q; end
-            6'h06: mem_rdata = {16'd0, sd_div, 7'd0, sd_cs};
-            6'h08: begin mem_ready = ~fl_busy & ~fl_start;              mem_rdata = {24'd0, fl_rx}; end
-            6'h09: begin mem_ready = fw_go & (fw_n == 0) & ~fl_busy; mem_rdata = fw_q; end
-            6'h0A: mem_rdata = {16'd0, fl_div, 7'd0, fl_cs};
             6'h0C: mem_ready = ~u_busy;
             6'h0D: begin mem_ready = is_wr | ev | timeout;   mem_rdata = {31'd0, ev}; end
             6'h0E: mem_rdata = ctrl;
             6'h0F: mem_rdata = cfg;
             default: ;
         endcase
-        // word reads first start the transfers, then wait for them
-        if (reg_a == 6'h05 && !sw_go) mem_ready = 0;
-        if (reg_a == 6'h09 && !fw_go) mem_ready = 0;
-        if ((reg_a == 6'h04 || reg_a == 6'h05 || reg_a == 6'h08 || reg_a == 6'h09) && is_wr)
-            mem_ready = reg_a[3] ? (~fl_busy & ~fl_start & (fw_n == 0)) : (~sd_busy & ~sd_start & (sw_n == 0));
+        if (sel_sd) begin mem_ready = sd_ready; mem_rdata = sd_rdata; end
+        if (sel_fl) begin mem_ready = fl_ready; mem_rdata = fl_rdata; end
+        if (sel_ct) begin mem_ready = ct_ready; mem_rdata = ct_rdata; end
     end else
         mem_ready = mem_valid;                                 // unmapped
 end
 
 // ------------------------------------------------------------ register writes and side effects
 always @(posedge clk) begin
-    sd_start <= 0;
-    fl_start <= 0;
     ioctl_wr <= 0;
     osd_we   <= 0;
     txt_we   <= 0;
@@ -242,26 +236,9 @@ always @(posedge clk) begin
         end else u_cnt <= u_cnt - 1'd1;
     end
 
-    // SD word read sequencer
-    if (sw_n != 0 && !sd_busy && !sd_start) begin
-        if (sw_n != 3'd5) sw_q <= {sd_rx, sw_q[31:8]};
-        if (sw_n == 3'd1) sw_n <= 0;
-        else begin sd_tx <= 8'hFF; sd_start <= 1; sw_n <= sw_n - 1'd1; end
-    end
-    if (fw_n != 0 && !fl_busy && !fl_start) begin
-        if (fw_n != 3'd5) fw_q <= {fl_rx, fw_q[31:8]};
-        if (fw_n == 3'd1) fw_n <= 0;
-        else begin fl_tx <= 8'hFF; fl_start <= 1; fw_n <= fw_n - 1'd1; end
-    end
-    if (mem_valid && is_io && !is_wr && reg_a == 6'h05 && !sw_go && !sd_busy && !sd_start) begin sw_go <= 1; sw_n <= 3'd5; end
-    if (mem_valid && is_io && !is_wr && reg_a == 6'h09 && !fw_go && !fl_busy && !fl_start) begin fw_go <= 1; fw_n <= 3'd5; end
 
     if (fire && is_io) begin
         if (is_wr) case (reg_a)
-            6'h04, 6'h05: begin sd_tx <= mem_wdata[7:0]; sd_start <= 1; end
-            6'h06: begin sd_cs <= mem_wdata[0]; sd_div <= mem_wdata[15:8]; end
-            6'h08, 6'h09: begin fl_tx <= mem_wdata[7:0]; fl_start <= 1; end
-            6'h0A: begin fl_cs <= mem_wdata[0]; fl_div <= mem_wdata[15:8]; end
             6'h0C: begin u_sh <= {1'b1, mem_wdata[7:0], 1'b0}; u_n <= 4'd10; u_cnt <= UDIV - 1; end
             6'h0D: begin wait_cnt <= mem_wdata[15:0]; ev <= 0; end
             6'h0E: ctrl <= mem_wdata;
@@ -271,8 +248,6 @@ always @(posedge clk) begin
             default: ;
         endcase else case (reg_a)
             6'h03: dirty <= 0;
-            6'h05: sw_go <= 0;
-            6'h09: fw_go <= 0;
             6'h0D: ev <= 0;
             default: ;
         endcase
@@ -285,22 +260,14 @@ always @(posedge clk) begin
             osd_data <= mem_addr[1] ? mem_wdata[31:16] : mem_wdata[15:0];
         end else begin
             txt_we   <= 1;
-            txt_addr <= mem_addr[8:0];
-            case (mem_addr[1:0])
-                2'd0: txt_data <= mem_wdata[7:0];
-                2'd1: txt_data <= mem_wdata[15:8];
-                2'd2: txt_data <= mem_wdata[23:16];
-                default: txt_data <= mem_wdata[31:24];
-            endcase
+            txt_addr <= mem_addr[9:1];
+            txt_data <= mem_addr[1] ? mem_wdata[31:16] : mem_wdata[15:0];
         end
     end
 
     if (reset) begin
         ctrl   <= 32'h0000_0001;          // core held in reset until a game is loaded
         cfg    <= 32'h0000_0000;
-        sd_cs  <= 0; fl_cs <= 0;
-        sd_div <= 8'd63; fl_div <= 8'd0;
-        sw_n   <= 0; fw_n <= 0; sw_go <= 0; fw_go <= 0;
         u_n    <= 0; u_sh <= 10'h3FF;
         ev     <= 0; dirty <= 0;
         ms     <= 0; ms_div <= 0; wait_cnt <= 0;
