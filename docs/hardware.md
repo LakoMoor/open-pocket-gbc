@@ -60,6 +60,23 @@ lcd_st7735 #(.CLK_HZ(33_750_000)) u_lcd (...);
 
 The on-board TF slot is used in SPI mode: CLK 83, CMD/MOSI 82, DAT0/MISO 84, DAT3/CS 81 (DAT1 / DAT2 held high). The clock is 260 kHz during initialisation and 16.9 MHz afterwards. SDSC, SDHC and SDXC cards work; the file system can be FAT12/16/32 or exFAT.
 
+### Cartridge flash (W25Qxx)
+
+An external SPI NOR flash module (W25Q16 to W25Q128, or a bare chip) works as a game cartridge.
+
+| Chip pin | FPGA pin |
+|---|---|
+| CS (1) | 51 |
+| DO / MISO (2) | 49 |
+| WP (3) | 3V3 |
+| GND (4) | GND |
+| DI / MOSI (5) | 55 |
+| CLK (6) | 48 |
+| HOLD (7) | 3V3 |
+| VCC (8) | 3V3 |
+
+The clock is 8.4 MHz, so short jumper wires are fine.
+
 ### Buzzer / speaker
 
 | Pin | Signal |
@@ -70,7 +87,7 @@ The on-board TF slot is used in SPI mode: CLK 83, CMD/MOSI 82, DAT0/MISO 84, DAT
 - **Piezo buzzer:** connect it between pins 76 and 75; the push-pull drive doubles the swing.
 - **Small speaker (8 Ω):** do not connect it directly. Use a transistor or a small class-D amplifier on pin 76, ideally after an RC low-pass (for example 1 kΩ + 10 nF).
 
-The output is the mono mix after the Volume setting, muted in the menu, and held low when Speaker is off.
+The output is the mono mix after the Volume setting, with the DC level removed and Speaker Boost applied (x4 by default), muted in the menu, and held low when Speaker is off.
 
 ### DualShock 2
 

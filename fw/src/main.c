@@ -28,7 +28,8 @@ typedef struct {
     uint8_t  sys_mode, hdmi_off, lcd_off, led_en;
     uint8_t  autosave, toasts, boot_menu, sleep_min;
     uint8_t  last_src, last_flash, speaker, spk_boost;
-    char     last_path[228];
+    char     last_path[224];
+    uint8_t  power_mode, rsv3[3];        // 0 normal, 1 battery
     uint32_t sum;
 } settings_t;
 
@@ -74,14 +75,23 @@ static void ctrl_bits(uint32_t mask, int on) {
 
 static const uint8_t bri_duty[4] = { 3, 7, 11, 15 };
 
+// Battery mode: HDMI off (PLL down, outputs tri-stated, no framebuffer writes), LCD at
+// 25 % and nearly dark after 30 s without input, no LEDs or debug lines, sleep after 5 min.
+static int lcd_dimmed;
+static int battery(void) { return set.power_mode == 1; }
+
 static void apply_settings(void) {
+    int batt = battery();
+    uint32_t duty = bri_duty[set.lcd_bri & 3];
+    if (batt && duty > 3) duty = 3;
+    if (lcd_dimmed) duty = 1;
     REG_CFG = (set.disp_mode & 3) | ((set.dmg_pal & 7) << 2) | ((set.gbc_raw & 1) << 5) |
-              ((set.lcd_crop & 1) << 6) | ((set.dbg_on & 1) << 7) |
-              ((uint32_t)bri_duty[set.lcd_bri & 3] << 8) | ((uint32_t)(set.volume & 7) << 12) |
+              ((set.lcd_crop & 1) << 6) | ((uint32_t)(set.dbg_on && !batt) << 7) |
+              (duty << 8) | ((uint32_t)(set.volume & 7) << 12) |
               ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16) | ((uint32_t)(set.spk_boost & 3) << 17);
     ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED);
-    ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off ? C_HDMI_OFF : 0) |
-            (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED : 0);
+    ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | ((set.hdmi_off || batt) ? C_HDMI_OFF : 0) |
+            (set.lcd_off ? C_LCD_OFF : 0) | ((set.led_en && !batt) ? C_LED : 0);
     ctrl_write();
 }
 
@@ -577,6 +587,11 @@ static void do_sleep(void) {
 }
 
 static const uint16_t sleep_minutes[4] = { 0, 5, 15, 30 };
+static uint32_t sleep_after_ms(void) {
+    uint32_t m = sleep_minutes[set.sleep_min & 3];
+    if (!m && battery()) m = 5;
+    return m * 60000u;
+}
 
 // ================================================================ menu model
 enum {
@@ -620,6 +635,7 @@ static const char *const o_sys[]   = { "Auto", "Game Boy Color", "Game Boy" };
 static const char *const o_boot[]  = { "Last Game", "Menu" };
 static const char *const o_sleep[] = { "Off", "5 min", "15 min", "30 min" };
 static const char *const o_boost[] = { "x1", "x2", "x4", "x8" };
+static const char *const o_power[] = { "Normal", "Battery" };
 
 static item_t *add(uint8_t id, uint8_t icon, const char *label, const char *desc) {
     if (nitems >= MAX_ITEMS) return &items[MAX_ITEMS - 1];
@@ -796,6 +812,7 @@ static void build_page(void) {
         add_opt(G_CHECK, "Save Notifications", "Show a short message when the save was written.", &set.toasts, 2, o_offon);
         add_opt(G_PLAY, "Start-up", "Start the last game or open the menu at power-up.", &set.boot_menu, 2, o_boot);
         add_opt(G_MOON, "Sleep Timer", "Sleep after this long without a button press.", &set.sleep_min, 4, o_sleep);
+        add_opt(G_POWER, "Power Mode", "Battery: HDMI off, LCD dimmed, no LEDs, sleep after 5 min. Hold S2 to toggle.", &set.power_mode, 2, o_power);
         add_opt(G_POWER, "Activity LEDs", "Board LEDs while loading and in the menu. Off saves a little power.", &set.led_en, 2, o_offon);
         add(I_DEFAULTS, G_RESET, "Reset Settings", "Restore all settings to their defaults.");
         break;
@@ -1071,7 +1088,7 @@ static int activate(item_t *it, int dir) {
         opt_changed(it);
         break;
     case I_DEFAULTS: {
-        char lp[228];
+        char lp[sizeof set.last_path];
         uint8_t ls = set.last_src, lf = set.last_flash;
         memcpy(lp, set.last_path, sizeof lp);
         set_defaults();
@@ -1128,7 +1145,7 @@ static void menu_run(void) {
         draw_menu();
         uint32_t k = poll_keys(page == P_INFO || page == P_MAIN ? 1000 : 5000);
         uint32_t now = ms_now();
-        if (set.sleep_min && (now - last_input_ms) > sleep_minutes[set.sleep_min & 3] * 60000u) { do_sleep(); osd_invalidate(); }
+        if (sleep_after_ms() && (now - last_input_ms) > sleep_after_ms()) { do_sleep(); osd_invalidate(); }
         if (!k) {
             if (now - refresh > 900 && (page == P_INFO || page == P_MAIN)) { build_page(); refresh = now; }
             continue;
@@ -1237,6 +1254,7 @@ int main(void) {
     osd_invalidate();
 
     int started = 0;
+    logf("start-up: menu %d, last src %d idx %d, power %d\n", set.boot_menu, set.last_src, set.last_flash, set.power_mode);
     if (!set.boot_menu) {
         if (set.last_src == 2 && sd_mounted && set.last_path[0]) started = load_game(2, 0, set.last_path) == 0;
         if (!started && set.last_src == 3 && cart_valid) started = load_game(3, 0, 0) == 0;
@@ -1248,13 +1266,13 @@ int main(void) {
     if (!started) menu_run();
     flash_sleep();
 
-    uint32_t s1_down = 0;
-    int s1_long = 0;
+    uint32_t s1_down = 0, s2_down = 0;
+    int s1_long = 0, s2_long = 0;
     uint32_t dbg_ms = 0;
     last_input_ms = ms_now();
     held = REG_IN & 0xFFFF;
     for (;;) {
-        REG_WAIT = (held & K_S1) ? 50 : 200;
+        REG_WAIT = (held & (K_S1 | K_S2)) ? 50 : battery() ? 500 : 200;
         (void)REG_WAIT;
         uint32_t in = REG_IN & 0xFFFF;
         uint32_t now = ms_now();
@@ -1267,14 +1285,26 @@ int main(void) {
         if (press & K_S1) { s1_down = now; s1_long = 0; }
         if ((in & K_S1) && !s1_long && now - s1_down >= 1000) {
             s1_long = 1;
-            set.hdmi_off ^= 1;
+            if (battery()) { set.power_mode = 0; set.hdmi_off = 0; }   // back to a picture
+            else set.hdmi_off ^= 1;
             apply_settings();
             settings_save();
             toast(set.hdmi_off ? "HDMI off" : "HDMI on", G_DISPLAY, CL_BLUE);
         }
+        // S2: short press = reset game, hold 1 s = battery mode on / off
+        if (press & K_S2) { s2_down = now; s2_long = 0; }
+        if ((in & K_S2) && !s2_long && now - s2_down >= 1000) {
+            s2_long = 1;
+            set.power_mode ^= 1;
+            lcd_dimmed = 0;
+            apply_settings();
+            settings_save();
+            logf("power mode: %s\n", battery() ? "battery" : "normal");
+            if (!battery()) toast("Normal power", G_POWER, CL_GREEN);
+        }
         int open = ((rel & K_S1) && !s1_long && now - s1_down >= 20) || (press & K_UMENU) ||
                    ((in & K_SEL) && (in & K_START) && (press & (K_SEL | K_START)));
-        if ((press & K_S2) || (press & K_URESET)) reset_game();
+        if (((rel & K_S2) && !s2_long && now - s2_down >= 20) || (press & K_URESET)) reset_game();
 
         uint32_t st = REG_STAT;
         if (st & 4) { game.save_pending = 1; game.dirty_ms = now; }
@@ -1291,6 +1321,9 @@ int main(void) {
             if (!menu_active) ctrl_bits(C_OSD, 0);
         }
         if (set.dbg_on && now - dbg_ms >= 250) { dbg_ms = now; dbg_update(st); }
-        if (set.sleep_min && now - last_input_ms > sleep_minutes[set.sleep_min & 3] * 60000u) do_sleep();
+        if (sleep_after_ms() && now - last_input_ms > sleep_after_ms()) do_sleep();
+        // battery mode: dim the LCD after 30 s without input, any button brings it back
+        int dim = battery() && now - last_input_ms > 30000;
+        if (dim != lcd_dimmed) { lcd_dimmed = dim; apply_settings(); }
     }
 }

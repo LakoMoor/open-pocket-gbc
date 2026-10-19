@@ -22,7 +22,10 @@ The MiSTer Game Boy core runs natively on the 20K's GW2AR-18 FPGA. Video goes ou
 - **Saves that survive power-off:** autosave 2 s after the game writes its cartridge RAM, and when the menu opens. SD games get `<rom>.sav` next to the ROM; flash games use a save slot in the flash, and only changed 4 KB sectors are rewritten.
 - **Settings are remembered** in the flash: display mode, palettes, volume, model, start-up game, power options.
 - **Power saving:** HDMI can be switched off (its PLL is powered down) with a long press on S1 or in the menu, so the board can run on the LCD alone. LCD on/off and backlight level, a sleep mode and sleep timer (game paused, HDMI and LCD off, any button wakes it up), board LEDs off by default, the flash in deep power-down, and the menu CPU sleeps in hardware while the game runs.
-- **Buzzer / speaker output:** sigma-delta audio on pins 76 / 75 (a piezo between the two pins, or a small speaker through a transistor), switched in Audio settings.
+- **Buzzer / speaker output:** sigma-delta audio on pins 76 / 75 (a piezo between the two pins, or a small speaker through an amplifier), with DC removal and up to x8 boost.
+- **Battery mode:** one switch (System → Power Mode or hold S2) turns off HDMI completely (PLL, tri-stated outputs, no framebuffer traffic), dims the LCD and darkens it after 30 s idle, turns off LEDs and sleeps after 5 min.
+- **Cartridge:** an external W25Qxx flash on four pins acts as a game cartridge. Games are written to it from the SD card in the menu, played from it, and keep their saves on it.
+- **SPI LCD menu:** the same Pocket-style look on the 128×128 screen: colour cells, icons, rounded selection bar, title bar and value line.
 - **ST7735S 128×128 SPI LCD**, driven together with HDMI at about 60 fps. *Fit* mode filters 160×144 down to 128×115; *Crop* mode shows the center 128×128 at 1:1. The menu is shown on the LCD too.
 - **Controls:** DualShock 2 on the Sipeed adapter, 8 plain buttons on header pins, and a **remote over the board's USB-UART**. All three work at the same time.
 - **Debug overlay:** FPS, GB/GBC mode, CPU speed, live button state, uptime, game name, mapper and ROM size. It is drawn in the HDMI border and in the top row of the LCD.
@@ -75,6 +78,7 @@ Toolchain setup, build options and the flash layout: [docs/build.md](docs/build.
 | Start / Select | Start / Select | Start / Select | | Enter / Backspace |
 | Open / close menu | Select + Start | Select + Start | **S1** | m |
 | HDMI on / off | | | **hold S1** for 1 s | |
+| Battery mode on / off | | | **hold S2** for 1 s | |
 | Reset game | | | **S2** | r |
 
 In the menu: up/down moves the cursor, left/right changes a value, A selects, B goes back or closes.
@@ -93,6 +97,7 @@ Buttons go from each pin to GND; the internal pull-ups are enabled. The LCD runs
 | B | 30 | | LCD BL | 52 |
 | Select | 31 | | DualShock 2 | 17–20 (Sipeed adapter) |
 | Start | 77 | | Speaker + / − | 76 / 75 |
+| Cartridge CS / CLK | 51 / 48 | | Cartridge DI / DO | 55 / 49 |
 | microSD | on-board slot | | HDMI | on board |
 
 Details, LCD orientation and color parameters: [docs/hardware.md](docs/hardware.md).

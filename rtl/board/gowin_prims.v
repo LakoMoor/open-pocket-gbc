@@ -70,6 +70,14 @@ output OB;
 endmodule
 
 (* blackbox *)
+module TLVDS_TBUF (I, OEN, O, OB);
+input I;
+input OEN;
+output O;
+output OB;
+endmodule
+
+(* blackbox *)
 module ELVDS_OBUF (I, O, OB);
 input I;
 output O;

@@ -372,7 +372,7 @@ fb_writer #(.FB_BASE_W(FB_BASE_W)) u_fbw (
     .clk(clk_sys), .reset(gb_reset), .ce(ce), .isGBC(isGBC),
     .lcd_clkena(lcd_clkena), .lcd_data(lcd_data), .lcd_mode(lcd_mode), .lcd_on(lcd_on), .lcd_vsync(lcd_vsync),
     .vs_event(vs_event), .rd_buf(rd_buf),
-    .wq_empty(wq_empty), .wq_addr(wq_addr), .wq_data(wq_data), .wq_level(wq_level), .wq_pop(wq_pop),
+    .wq_empty(wq_empty), .wq_addr(wq_addr), .wq_data(wq_data), .wq_level(wq_level), .wq_pop(wq_pop), .fb_en(~hdmi_off),
     .px_we(px_we), .px_first(px_first), .px_data(px_data)
 );
 
@@ -545,7 +545,8 @@ hdmi #(
     .frame_width(), .frame_height(), .screen_width(), .screen_height()
 );
 
-TLVDS_OBUF u_obuf [3:0] (.I({tmds_clock, tmds}), .O({tmds_clk_p, tmds_d_p}), .OB({tmds_clk_n, tmds_d_n}));
+// tri-stated while HDMI is off, so no current flows into the sink's termination
+TLVDS_TBUF u_obuf [3:0] (.I({tmds_clock, tmds}), .OEN({4{hdmi_off}}), .O({tmds_clk_p, tmds_d_p}), .OB({tmds_clk_n, tmds_d_n}));
 
 assign led = ~({menu_open & menu_dim, loading} & {2{led_en}});
 

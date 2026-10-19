@@ -25,6 +25,7 @@ module fb_writer #(
     output     [31:0] wq_data,
     output      [5:0] wq_level,
     input             wq_pop,
+    input             fb_en,           // 0: no framebuffer writes (HDMI off), px_* still runs
 
     // the same pixel stream for the SPI LCD
     output            px_we,
@@ -144,7 +145,7 @@ always @(posedge clk) begin
         wp <= 0;
         rp <= 0;
     end else begin
-        if (push && level != 6'd32) begin
+        if (push && fb_en && level != 6'd32) begin
             fifo[wp[4:0]] <= push_data;
             wp <= wp + 1'd1;
         end
