@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.1"
+#define FW_VERSION      "1.2"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
