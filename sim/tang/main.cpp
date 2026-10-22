@@ -2,7 +2,8 @@
 // Verilator, with models of what sits on the board: the SPI flash (firmware, games,
 // settings), an SD card image, the ST7735 LCD, the buttons and the USB-UART.
 //
-//   tang_sim [--flash flash.bin] [--sd sd.img] [--no-hdmi] [--ms N] [--stdout-text]
+//   tang_sim [--flash flash.bin] [--sd sd.img] [--cart rom.gb] [--no-hdmi] [--ms N] [--stdout-text]
+//   --cart puts an original cartridge (MBC1/2/3/5) in the shift-register cartridge reader
 //
 // stdout carries binary messages for Open Pocket Studio: one type byte, a u32 length, data:
 //   'L' UART log text   'C' LCD frame 128x128 RGB565   'T' sim ms (u32)
@@ -232,16 +233,108 @@ static void save(const char *path, const std::vector<uint8_t> &v) {
     if (f) { fwrite(v.data(), 1, v.size(), f); fclose(f); }
 }
 
+// ---------------------------------------------------------------- original-cartridge reader
+// The shift-register reader on the cartridge port (docs/cart_reader.md) with a cartridge in it:
+// 74HCT595 x4 (D out, control, A8-15, A0-7), 74LV165 (D in), and an MBC1/2/3/5 cartridge.
+struct CartReader {
+    std::vector<uint8_t> rom, ram;
+    int mbc = 0;                                     // 0 none, 1 MBC1, 2 MBC2, 3 MBC3, 5 MBC5
+    uint32_t sr = 0, out = 0xFFFFFFFF;
+    uint8_t q = 0xFF;
+    int last_clk = 0, last_cs = 1, miso = 1;
+    int rom_bank = 1, ram_bank = 0, ram_en = 0, mode = 0, upper = 0;
+    uint32_t writes = 0;
+    void init() {
+        uint8_t t = rom.size() > 0x147 ? rom[0x147] : 0;
+        mbc = (t >= 1 && t <= 3) ? 1 : (t == 5 || t == 6) ? 2 : (t >= 0x0F && t <= 0x13) ? 3 : t == 0 ? 0 : 5;
+        static const uint32_t rs[] = {0, 2048, 8192, 32768, 131072, 65536};
+        uint8_t rc = rom.size() > 0x149 ? rom[0x149] : 0;
+        ram.assign(mbc == 2 ? 512 : rc < 6 ? rs[rc] : 0, 0);
+        for (size_t i = 0; i < ram.size(); i++) ram[i] = (uint8_t)(i * 7 + 3);   // a known "save"
+    }
+    uint8_t rd(uint16_t a, bool cs) {
+        if (cs && a >= 0xA000 && a < 0xC000) {
+            if (!ram_en || ram.empty()) return 0xFF;
+            uint32_t o = mbc == 2 ? (a & 0x1FF) : ((uint32_t)(mbc == 1 && !mode ? 0 : ram_bank) << 13 | (a & 0x1FFF));
+            return o < ram.size() ? (mbc == 2 ? (ram[o] | 0xF0) : ram[o]) : 0xFF;
+        }
+        if (cs || a >= 0x8000) return 0xFF;
+        uint32_t bank;
+        if (a < 0x4000) bank = (mbc == 1 && mode) ? (upper << 5) : 0;
+        else if (mbc == 1) bank = (upper << 5) | (rom_bank ? rom_bank : 1);
+        else if (mbc == 0) bank = 1;
+        else bank = rom_bank;
+        uint32_t o = (bank * 0x4000 + (a & 0x3FFF)) % (rom.empty() ? 1 : rom.size());
+        return rom.empty() ? 0xFF : rom[o];
+    }
+    void wr(uint16_t a, uint8_t v, bool cs) {
+        writes++;
+        if (cs && a >= 0xA000 && a < 0xC000) {
+            if (!ram_en || ram.empty()) return;
+            uint32_t o = mbc == 2 ? (a & 0x1FF) : ((uint32_t)(mbc == 1 && !mode ? 0 : ram_bank) << 13 | (a & 0x1FFF));
+            if (o < ram.size()) ram[o] = mbc == 2 ? (v & 0x0F) : v;
+            return;
+        }
+        if (a >= 0x8000) return;
+        switch (mbc) {
+        case 1:
+            if (a < 0x2000) ram_en = (v & 0x0F) == 0x0A;
+            else if (a < 0x4000) rom_bank = v & 0x1F;
+            else if (a < 0x6000) { upper = v & 3; ram_bank = v & 3; }
+            else mode = v & 1;
+            break;
+        case 2:
+            if (a < 0x4000) { if (a & 0x100) rom_bank = (v & 0x0F) ? (v & 0x0F) : 1; else ram_en = (v & 0x0F) == 0x0A; }
+            break;
+        case 3:
+            if (a < 0x2000) ram_en = (v & 0x0F) == 0x0A;
+            else if (a < 0x4000) rom_bank = (v & 0x7F) ? (v & 0x7F) : 1;
+            else if (a < 0x6000) ram_bank = v & 3;
+            break;
+        case 5:
+            if (a < 0x2000) ram_en = (v & 0x0F) == 0x0A;
+            else if (a < 0x3000) rom_bank = (rom_bank & 0x100) | v;
+            else if (a < 0x4000) rom_bank = (rom_bank & 0xFF) | ((v & 1) << 8);
+            else if (a < 0x6000) ram_bank = v & 0x0F;
+            break;
+        }
+    }
+    uint8_t bus() {                                  // what the data bus shows now
+        uint8_t ctl = out >> 16;
+        uint16_t a = out & 0xFFFF;
+        if (!(ctl & 0x10)) return out >> 24;         // our data driver is on
+        if (!(ctl & 0x01)) return rd(a, !(ctl & 0x04));
+        return 0xFF;                                 // pull-ups
+    }
+    void step(int cs_n, int clk, int mosi) {
+        if (!cs_n) q = bus();                        // 165 /PL low: parallel load
+        if (clk && !last_clk) {
+            if (cs_n) q = (uint8_t)(q << 1);         // 165 shifts (DS = 0)
+            sr = (sr << 1) | (mosi & 1);             // 595 chain shifts
+        }
+        if (cs_n && !last_cs) {                      // RCLK rising: outputs update
+            uint32_t old = out;
+            out = sr;
+            uint8_t oc = old >> 16, nc = out >> 16;
+            if ((oc & 0x02) && !(nc & 0x02) && !(nc & 0x10))   // /WR falls with data driven
+                wr(out & 0xFFFF, out >> 24, !(nc & 0x04));
+        }
+        last_clk = clk; last_cs = cs_n;
+        miso = (q >> 7) & 1;
+    }
+};
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
-    const char *flash_path = nullptr, *sd_path = nullptr;
+    const char *flash_path = nullptr, *sd_path = nullptr, *cart_path = nullptr;
     bool hdmi = true;
     long max_ms = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--flash") && i + 1 < argc) flash_path = argv[++i];
         else if (!strcmp(argv[i], "--sd") && i + 1 < argc) sd_path = argv[++i];
+        else if (!strcmp(argv[i], "--cart") && i + 1 < argc) cart_path = argv[++i];
         else if (!strcmp(argv[i], "--no-hdmi")) hdmi = false;
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc) max_ms = atol(argv[++i]);
         else if (!strcmp(argv[i], "--stdout-text")) text_only = true;
@@ -257,6 +350,9 @@ int main(int argc, char **argv) {
     SpiSlave<FlashDev> fl;
     SpiSlave<SdDev> sd;
     Lcd lcd;
+    CartReader cr;
+    bool cart_on = cart_path && load(cart_path, cr.rom, 0);
+    if (cart_on) cr.init();
     top->s1 = 0; top->s2 = 0; top->key_n = 0xFF; top->key_menu_n = 1; top->uart_rx = 1;
     top->sd_dat0 = 1; top->flash_miso = 1; top->cart_miso = 1;
     std::thread(reader).detach();
@@ -284,6 +380,7 @@ int main(int argc, char **argv) {
             sd.step(top->sd_dat3, top->sd_clk, top->sd_cmd);
             top->sd_dat0 = sd.miso;
             lcd.step(top->lcd_cs, top->lcd_scl, top->lcd_sda, top->lcd_dc);
+            if (cart_on) { cr.step(top->cart_cs_n, top->cart_clk, top->cart_mosi); top->cart_miso = cr.miso; }
             // UART tx -> log
             if (u_cnt < 0) { if (!top->uart_tx) { u_cnt = UDIV + UDIV / 2; u_bit = 0; u_byte = 0; } }
             else if (--u_cnt == 0) {
@@ -353,6 +450,11 @@ int main(int argc, char **argv) {
     if (!logbuf.empty()) msg('L', logbuf.data(), (uint32_t)logbuf.size());
     if (flash_path && fl.dev.dirty) save(flash_path, flash);
     if (sd_path && sd.dev.dirty) save(sd_path, sdimg);
+    if (cart_on) {
+        unsigned diff = 0;
+        for (size_t i = 0; i < cr.ram.size(); i++) diff += cr.ram[i] != (uint8_t)(i * 7 + 3);
+        fprintf(stderr, "cartridge: %u bus writes, %u RAM bytes changed\n", cr.writes, diff);
+    }
     top->final();
     delete top;
     delete ctx;

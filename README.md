@@ -28,6 +28,7 @@ The MiSTer Game Boy core runs natively on the 20K's GW2AR-18 FPGA. Video goes ou
 - **Power page:** every power saving measure as its own setting, plus Normal / Battery presets.
 - **Battery mode:** one switch (System → Power Mode or hold S2) turns off HDMI completely (PLL, tri-stated outputs, no framebuffer traffic), dims the LCD and darkens it after 30 s idle, turns off LEDs and sleeps after 5 min.
 - **Cartridge:** an external W25Qxx flash on four pins acts as a game cartridge. Games are written to it from the SD card in the menu, played from it, and keep their saves on it.
+- **Original cartridges:** the same four pins drive a five-chip shift-register reader (no microcontroller) for real Game Boy / GBC cartridges, MBC1/2/3/5. The ROM is copied to SDRAM and the battery save goes back to the cartridge: [docs/cart_reader.md](docs/cart_reader.md).
 - **SPI LCD menu:** the same Pocket-style look on the 128×128 screen: colour cells, icons, rounded selection bar, title bar and value line.
 - **ST7735S 128×128 SPI LCD**, driven together with HDMI at about 60 fps. *Fit* mode filters 160×144 down to 128×115; *Crop* mode shows the center 128×128 at 1:1. The menu is shown on the LCD too.
 - **Controls:** DualShock 2 on the Sipeed adapter, 8 plain buttons on header pins, and a **remote over the board's USB-UART**. All three work at the same time.
@@ -109,6 +110,7 @@ Details, LCD orientation and color parameters: [docs/hardware.md](docs/hardware.
 
 - [docs/build.md](docs/build.md): toolchain, build, flashing, game images, build switches
 - [docs/hardware.md](docs/hardware.md): wiring, LCD module notes, controllers
+- [docs/cart_reader.md](docs/cart_reader.md): the original-cartridge reader
 - [docs/menu.md](docs/menu.md): every menu item, saves, power saving and the debug overlay
 - [docs/remote.md](docs/remote.md): USB-UART remote protocol, scripting, recording GIFs
 - [docs/architecture.md](docs/architecture.md): how the port works (clocks, SDRAM, framebuffer, video, the open-source flow)

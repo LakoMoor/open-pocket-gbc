@@ -77,6 +77,10 @@ An external SPI NOR flash module (W25Q16 to W25Q128, or a bare chip) works as a 
 
 The clock is 8.4 MHz, so short jumper wires are fine.
 
+### Original cartridges
+
+The same four pins can instead drive a reader for original Game Boy / GBC cartridges: four 74HCT595 and a 74LV165, no microcontroller. See [cart_reader.md](cart_reader.md). The menu probes for a W25Q first and for the reader when no flash answers.
+
 ### Buzzer / speaker
 
 | Pin | Signal |

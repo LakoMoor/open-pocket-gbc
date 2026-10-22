@@ -8,6 +8,7 @@
 #include <string.h>
 #include <strings.h>
 #include "util.h"
+#include "gbcart.h"
 #include "osd.h"
 #include "ff.h"
 
@@ -149,6 +150,7 @@ typedef struct { uint32_t magic, rom_size, rsv[2]; char name[48]; } cart_hdr_t;
 static uint32_t   cart_id, cart_size;
 static cart_hdr_t cart;
 static int        cart_valid;
+static int        cart_reader;        // no flash answered, but an original cartridge did (gbcart.c)
 
 static uint32_t cart_save_addr(void) { return cart_size - 0x21000; }
 static uint32_t cart_rom_max(void) { return cart_size > 0x41000 ? cart_size - 0x21000 - CART_ROM : 0; }
@@ -159,14 +161,32 @@ static void cart_probe(void) {
     cart_id = flash_id();
     cart_size = flash_size(cart_id);
     cart_valid = 0;
+    cart_reader = 0;
     if (cart_size) {
         flash_read(0, &cart, sizeof cart);
         cart.name[47] = 0;
         cart_valid = cart.magic == CART_MAGIC && cart.rom_size >= 0x8000 && cart.rom_size <= cart_rom_max();
         flash_sleep();
+    } else {
+        // no W25Q: maybe the cartridge reader with an original cartridge in it
+        uint8_t h[0x50];
+        if (gbcart_probe(h)) {
+            cart_reader = 1;
+            memset(&cart, 0, sizeof cart);
+            cart.rom_size = 0x8000u << h[0x48];
+            int n = 0;
+            for (int i = 0; i < 16; i++) {
+                uint8_t c = h[0x34 + i];
+                if (c == 0 || (i >= 11 && (c & 0x80))) break;
+                cart.name[n++] = (c >= 32 && c < 127) ? c : ' ';
+            }
+            while (n && cart.name[n - 1] == ' ') n--;
+            if (!n) strcpy(cart.name, "Cartridge");
+            cart_valid = cart.rom_size <= ROM_MAX;
+        }
     }
     flash_select(0);
-    logf("cart: id %06x, %u KB, %s\n", cart_id, cart_size >> 10, cart_valid ? cart.name : "no game");
+    logf("cart: id %06x, %u KB%s, %s\n", cart_id, cart_size >> 10, cart_reader ? " (reader)" : "", cart_valid ? cart.name : "no game");
 }
 
 // ================================================================ game state
@@ -314,7 +334,10 @@ static void save_load(void) {
     volatile uint8_t *cram = sdram(CRAM_BASE);
     for (uint32_t i = 0; i < 131072; i += 4) *(volatile uint32_t *)(cram + i) = 0xFFFFFFFFu;
     if (!game.battery || !game.save_bytes) return;
-    if (game.src == 2 && sd_mounted) {
+    if (game.src == 3 && cart_reader) {
+        gbcart_read_ram(CRAM_BASE, game.save_bytes);
+        logf("save read from the cartridge RAM\n");
+    } else if (game.src == 2 && sd_mounted) {
         char p[260];
         FIL f;
         sav_path(p, game.path);
@@ -342,7 +365,11 @@ static void save_load(void) {
 static int save_write(void) {
     if (!game.loaded || !game.battery || !game.save_bytes) return -1;
     int ok = -1;
-    if (game.src == 2 && sd_mounted) {
+    if (game.src == 3 && cart_reader) {
+        uint32_t n = gbcart_write_ram(CRAM_BASE, game.save_bytes);
+        logf("cartridge RAM: %u bytes changed\n", n);
+        ok = n ? 0 : 1;
+    } else if (game.src == 2 && sd_mounted) {
         char p[260];
         FIL f;
         sav_path(p, game.path);
@@ -413,6 +440,7 @@ static void cart_progress(uint32_t done, uint32_t total) {
 
 // writes the ROM in SDRAM to the cartridge flash
 static int cart_write_rom(void) {
+    if (cart_reader) { message_screen("Original cartridge", "it is read-only"); wait_ms(2000); return -1; }
     if (!cart_size) { message_screen("No cartridge flash", "CS 51 CLK 48 DI 55 DO 49"); wait_ms(2000); return -1; }
     if (game.rom_bytes > cart_rom_max()) { message_screen("Cartridge too small", game.name); wait_ms(2000); return -1; }
     cart_hdr_t h;
@@ -1246,6 +1274,9 @@ static void printer_run(void) {
     wait_release();
 }
 
+static const char *cart_shown;
+static void cart_load_progress(uint32_t done, uint32_t total) { progress_screen("Reading cartridge", cart_shown, done, total); }
+
 // src 1: flash index, src 2: SD path, src 3: cartridge
 static int load_game_rom(int src, int idx, const char *path) {
     if (game.loaded && game.save_pending) save_write();
@@ -1272,6 +1303,13 @@ static int load_game_rom(int src, int idx, const char *path) {
     } else if (src == 3) {
         if (!cart_valid) { message_screen("No game on the cartridge", ""); ctrl_bits(C_DOWNLOAD, 0); wait_ms(1500); return -1; }
         size = cart.rom_size;
+        if (cart_reader) {
+            cart_shown = shown;
+            uint32_t t0 = ms_now();
+            int ok = gbcart_read_rom(ROM_BASE, size, cart_load_progress);
+            logf("cartridge read: %u KB in %u ms, checksum %s\n", size >> 10, ms_now() - t0, ok ? "ok" : "MISMATCH");
+            if (!ok) { message_screen("Cartridge checksum mismatch", "check the reader wiring"); wait_ms(1500); }
+        } else {
         flash_select(1);
         for (uint32_t o = 0; o < size; o += 0x10000) {
             progress_screen("Loading cartridge", shown, o, size);
@@ -1280,6 +1318,7 @@ static int load_game_rom(int src, int idx, const char *path) {
         }
         flash_sleep();
         flash_select(0);
+        }
     } else {
         FIL f;
         if (!sd_mounted || f_open(&f, path, FA_READ) != FR_OK) {
@@ -1815,7 +1854,7 @@ static void build_page(void) {
         strcpy(it->value, sd_mounted ? "Ready" : "No card");
         it = add(I_SRC_FLASH, G_FLASH, "Internal Flash", "Games written with make_games.py. Saves stay in the flash.");
         sfmt(it->value, sizeof it->value, "%d games", fl_count);
-        it = add(I_SRC_CART, G_CART, "Cartridge", "External W25Q flash: play the game written to it from the SD card.");
+        it = add(I_SRC_CART, G_CART, "Cartridge", "External W25Q flash with a game written from the SD card, or an original cartridge in the cartridge reader.");
         strncpy(it->value, cart_valid ? cart.name : cart_size ? "Empty" : "Not found", 22);
         break;
     }
@@ -1825,7 +1864,13 @@ static void build_page(void) {
             item_t *it = add(I_PLAY_CART, G_PLAY, "Play", "Load the game from the cartridge. Saves are kept on it.");
             strncpy(it->value, cart.name, 24);
         }
-        if (cart_size) {
+        if (cart_reader) {
+            add_info("Source", "original cartridge");
+            if (cart_valid) {
+                add_info("ROM", "%u KB", cart.rom_size >> 10);
+                add_info("Saves", "on the cartridge");
+            } else add_info("Game", "none: insert a cartridge");
+        } else if (cart_size) {
             add_info("Chip", "%06x, %u MB", cart_id, cart_size >> 20 ? cart_size >> 20 : 1);
             if (cart_valid) {
                 add_info("ROM", "%u KB", cart.rom_size >> 10);
@@ -1915,7 +1960,8 @@ static void build_page(void) {
         if (sd_mounted) add_info("SD card", "%u MB", sd_sectors() / 2048);
         else add_info("SD card", "not found");
         add_info("Flash", "%06x, %d games", flash_id(), fl_count);
-        if (cart_size) add_info("Cartridge", "%u MB%s%s", cart_size >> 20 ? cart_size >> 20 : 1, cart_valid ? ", " : "", cart_valid ? cart.name : "");
+        if (cart_reader) add_info("Cartridge", "original%s%s", cart_valid ? ", " : "", cart_valid ? cart.name : "");
+        else if (cart_size) add_info("Cartridge", "%u MB%s%s", cart_size >> 20 ? cart_size >> 20 : 1, cart_valid ? ", " : "", cart_valid ? cart.name : "");
         else add_info("Cartridge", "not connected");
         uint32_t s = ms_now() / 1000;
         add_info("Uptime", "%u:%02u:%02u", s / 3600, (s / 60) % 60, s % 60);
