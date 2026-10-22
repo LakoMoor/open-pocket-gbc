@@ -146,9 +146,12 @@ wire [11:0] pad_gpio = {3'b000, key_q[4], key_q[3], key_q[2], key_q[1], key_q[0]
 // remote control over the USB-UART
 wire [11:0] pad_uart;
 wire        uart_menu, uart_reset, uart_seen;
+wire  [7:0] uart_byte;
+wire [11:0] uart_div;              // UART bit time, set by the firmware (fast for the screen stream)
+wire  [1:0] fb_newest;             // last complete framebuffer (iosys STAT, from fb_writer)
 uart_pad #(.CLK_HZ(33_750_000)) u_uart_pad (
-    .clk(clk_sys), .reset(sys_rst), .rx(uart_rx),
-    .pad(pad_uart), .key_menu(uart_menu), .key_reset(uart_reset), .rx_seen(uart_seen)
+    .clk(clk_sys), .reset(sys_rst), .rx(uart_rx), .div(uart_div),
+    .pad(pad_uart), .key_menu(uart_menu), .key_reset(uart_reset), .rx_seen(uart_seen), .rx_byte(uart_byte)
 );
 wire [11:0] pad_ok   = pad_ds | pad_gpio | pad_uart;
 
@@ -196,8 +199,8 @@ iosys #(.CLK_HZ(33_750_000)) u_io (
     .uart_tx(uart_tx),
     .link_sc(prn_sc_in), .link_si(prn_si_in), .prn_so(prn_so),
     .inputs({uart_reset, uart_menu, s2_s[1], s1_s[1], pad_arm}),
-    .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .stat_buf(rd_buf),
-    .uart_seen(uart_seen), .gpio_in({chg, led[1], led[0]}), .gpio_out(gpio_out), .cram_wr(cram_wr & ~gb_reset),
+    .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .stat_buf(fb_newest),
+    .uart_seen(uart_seen), .uart_byte(uart_byte), .uart_div(uart_div), .gpio_in({chg, led[1], led[0]}), .gpio_out(gpio_out), .cram_wr(cram_wr & ~gb_reset),
     .ctrl(ctrl), .cfg(cfg), .beep(beep),
     .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
     .osd_we(osd_we), .osd_addr(osd_waddr), .osd_data(osd_wdata),
@@ -396,7 +399,7 @@ wire [14:0] px_data;
 fb_writer #(.FB_BASE_W(FB_BASE_W)) u_fbw (
     .clk(clk_sys), .reset(gb_reset), .ce(ce), .isGBC(isGBC),
     .lcd_clkena(lcd_clkena), .lcd_data(lcd_data), .lcd_mode(lcd_mode), .lcd_on(lcd_on), .lcd_vsync(lcd_vsync),
-    .vs_event(vs_event), .rd_buf(rd_buf),
+    .vs_event(vs_event), .rd_buf(rd_buf), .newest(fb_newest),
     .wq_empty(wq_empty), .wq_addr(wq_addr), .wq_data(wq_data), .wq_level(wq_level), .wq_pop(wq_pop), .fb_en(~hdmi_off | fb_force),
     .px_we(px_we), .px_first(px_first), .px_data(px_data)
 );

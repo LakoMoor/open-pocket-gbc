@@ -63,6 +63,7 @@ object Board : SerialInputOutputManager.Listener {
     }
 
     fun disconnect() {
+        _live.value = false; fast = false; keepalive?.interrupt(); keepalive = null
         io?.stop(); io = null
         try { port?.close() } catch (_: Exception) {}
         port = null
@@ -94,7 +95,70 @@ object Board : SerialInputOutputManager.Listener {
         return grab("LCD-BEGIN", "LCD-END", 16) to grab("OSD-BEGIN", "OSD-END", 42)
     }
 
+    // ---- live screen: 'V' asks the firmware to switch to ~2 Mbaud and stream (see LiveScreen)
+    private val _live = MutableStateFlow(false)
+    val live = _live.asStateFlow()
+    @Volatile private var fast = false
+    private var keepalive: Thread? = null
+
+    fun startScreen() {
+        if (port == null || _live.value) return
+        _live.value = true
+        write("V")
+        keepalive = Thread {
+            var n = 0
+            while (_live.value && port != null) {
+                try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+                if (!fast && ++n % 2 == 0) write("V")            // no answer yet: ask again
+                else write(".")
+            }
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    fun stopScreen() {
+        if (!_live.value) return
+        _live.value = false
+        keepalive?.interrupt(); keepalive = null
+        write("v")
+        writer.execute {
+            Thread.sleep(60)
+            try { port?.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE) } catch (_: Exception) {}
+            fast = false
+        }
+    }
+
+    private fun goFast(baud: Int) {
+        writer.execute {
+            try {
+                port?.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                fast = true
+                appendLog("screen stream at $baud baud\n")
+            } catch (e: Exception) { appendLog("USB: can't set $baud baud: ${e.message}\n"); _live.value = false }
+        }
+    }
+
+    // packet parser: text until 0x00, then type, u16 length, payload
+    private var pState = 0; private var pType = ' '; private var pLen = 0; private var pPos = 0
+    private val pBuf = ByteArray(4096)
+    private val text = java.io.ByteArrayOutputStream()
+
     override fun onNewData(data: ByteArray) {
+        if (!fast) { onText(data); return }
+        for (b in data) {
+            val v = b.toInt() and 255
+            when (pState) {
+                0 -> if (v == 0) pState = 1 else text.write(v)
+                1 -> { pType = v.toChar(); pState = 2 }
+                2 -> { pLen = v; pState = 3 }
+                3 -> { pLen = pLen or (v shl 8); pPos = 0; pState = if (pLen == 0) { LiveScreen.packet(pType, pBuf, 0); 0 } else if (pLen > pBuf.size) 5 else 4 }
+                4 -> { pBuf[pPos++] = b; if (pPos == pLen) { LiveScreen.packet(pType, pBuf, pLen); pState = 0 } }
+                5 -> if (++pPos == pLen) pState = 0                // oversized: skip
+            }
+        }
+        if (text.size() > 0) { onText(text.toByteArray()); text.reset() }
+    }
+
+    private fun onText(data: ByteArray) {
         val s = String(data, Charsets.ISO_8859_1)
         synchronized(rx) {
             rx.append(s)
@@ -107,7 +171,10 @@ object Board : SerialInputOutputManager.Listener {
             if (i < 0) return
             val text = rx.substring(0, i + 1)
             rx.delete(0, i + 1)
-            val keep = text.split('\n').map { it.trimEnd('\r') }.filter { l ->
+            val lines = text.split('\n').map { it.trimEnd('\r') }
+            // the firmware switched to the stream rate (1.985 Mbaud): 2 Mbaud is within 1 %
+            if (_live.value && !fast && lines.any { it.startsWith("#SCR ") }) goFast(2_000_000)
+            val keep = lines.filter { l ->
                 l.isNotEmpty() && !l.startsWith("LCD-") && !l.startsWith("OSD-") &&
                     !((l.length == 64 || l.length == 84) && l.all { it in "0123456789abcdef" })
             }

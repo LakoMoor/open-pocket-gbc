@@ -360,7 +360,8 @@ int main(int argc, char **argv) {
     const int BAND = 24;
     std::vector<uint8_t> frame(720 * 480 * 3), sent(720 * 480 * 3, 1), band(4 + 720 * BAND * 3);
     int last_vclk = 0, last_sclk = 0, last_cy = 0;
-    const int UDIV = 33750000 / 115200;
+    int UDIV = 33750000 / 115200;                    // follows the firmware: 17 after "#SCR"
+    bool uart_fast = false;
     int u_cnt = -1, u_bit = 0, u_byte = 0;          // UART tx decoder
     std::deque<uint8_t> rx_q;                        // remote bytes to send
     int rx_cnt = 0, rx_bit = -1, rx_byte = 0;
@@ -386,9 +387,10 @@ int main(int argc, char **argv) {
             else if (--u_cnt == 0) {
                 if (u_bit < 8) { u_byte |= (top->uart_tx & 1) << u_bit; u_bit++; u_cnt = UDIV; }
                 else {
-                    if (u_byte != '\r') logbuf += (char)u_byte;
+                    if (uart_fast || u_byte != '\r') logbuf += (char)u_byte;
+                    if (!uart_fast && u_byte == '\n' && logbuf.find("#SCR ") != std::string::npos) { UDIV = 17; uart_fast = true; }
                     u_cnt = -1;
-                    if (u_byte == '\n' || logbuf.size() > 200) { msg('L', logbuf.data(), (uint32_t)logbuf.size()); logbuf.clear(); }
+                    if ((!uart_fast && u_byte == '\n') || logbuf.size() > 200) { msg('L', logbuf.data(), (uint32_t)logbuf.size()); logbuf.clear(); }
                 }
             }
             // UART rx <- remote bytes

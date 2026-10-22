@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.2"
+#define FW_VERSION      "1.3"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -1414,6 +1414,123 @@ static void reset_game(void) {
     ctrl_write();
 }
 
+// ================================================================ screen stream over the USB-UART
+// The app sends 'V' (at 115200): the firmware answers "#SCR <baud>", switches the UART (TX and
+// the remote's RX) to ~2 Mbaud and streams the picture until 'v' or 4 s without a byte (the app
+// sends '.' every second). Packets: 0x00, type, u16 length, payload; log text goes between them.
+//   'P' mode: gbc, gbc_raw, dmg palette (4 x RGB)       'O' OSD: flags (1 shown, 2 dim), 42x24 cells
+//   'L' LCD text: flags, 16x12 cells                   'G' a changed row: y, PackBits of 160 x u16
+//   'F' end of frame: u16 frame counter
+#define SCR_PREV  0x770000u            // the frame as last sent (160 x 144 x 2 bytes)
+#define UDIV_SLOW (33750000 / 115200)
+#define UDIV_FAST 17                   // 1.985 Mbaud
+static int      scr_on, scr_buf = -1, scr_mode = -1, scr_osd_flags = -1;
+static uint32_t scr_rx_ms, scr_osd_ver, scr_lcd_ver, scr_keep_ctrl;
+static uint16_t scr_frame;
+
+static inline void scr_put(uint32_t b) { UART_TX = (uint8_t)b; }
+static void scr_hdr(char t, uint32_t len) { scr_put(0); scr_put(t); scr_put(len); scr_put(len >> 8); }
+
+static void scr_start(void) {
+    logf("#SCR %u\n", 33750000u / UDIV_FAST);
+    wait_ms(40);                       // the app reopens the port at the new rate
+    REG_UART = UDIV_FAST;
+    scr_on = 1;
+    scr_rx_ms = ms_now();
+    scr_buf = scr_mode = scr_osd_flags = -1;
+    scr_osd_ver = scr_lcd_ver = ~0u;
+    volatile uint32_t *p = (volatile uint32_t *)sdram(SCR_PREV);
+    for (int i = 0; i < 160 * 144 / 2; i++) p[i] = 0xFFFFFFFFu;      // every row counts as changed
+    scr_keep_ctrl = ctrl & C_FB_FORCE;
+}
+static void scr_stop(void) {
+    wait_ms(5);
+    REG_UART = UDIV_SLOW;
+    scr_on = 0;
+    ctrl = (ctrl & ~C_FB_FORCE) | scr_keep_ctrl;
+    ctrl_write();
+}
+
+// PackBits on 16-bit pixels: c < 128: c + 1 literal pixels follow; c >= 128: c - 126 copies of one
+static int scr_pack(const uint16_t *px, uint8_t *out) {
+    int i = 0, o = 0;
+    while (i < 160) {
+        int r = 1;
+        while (i + r < 160 && r < 129 && px[i + r] == px[i]) r++;
+        if (r >= 2) {
+            out[o++] = (uint8_t)(r + 126); out[o++] = (uint8_t)px[i]; out[o++] = (uint8_t)(px[i] >> 8);
+            i += r;
+            continue;
+        }
+        int s = i, n = 0;
+        while (i < 160 && n < 128 && !(i + 1 < 160 && px[i + 1] == px[i])) { i++; n++; }
+        out[o++] = (uint8_t)(n - 1);
+        for (int k = s; k < s + n; k++) { out[o++] = (uint8_t)px[k]; out[o++] = (uint8_t)(px[k] >> 8); }
+    }
+    return o;
+}
+
+static void scr_cells(char t, const uint16_t *c, int n, int flags) {
+    scr_hdr(t, 1 + (flags & 1 ? n * 2 : 0));
+    scr_put(flags);
+    if (flags & 1) for (int i = 0; i < n; i++) { scr_put(c[i]); scr_put(c[i] >> 8); }
+}
+
+static void scr_poll(void) {
+    uint32_t r = REG_UART;
+    if (r & 0x800) {
+        uint8_t c = (uint8_t)r;
+        scr_rx_ms = ms_now();
+        if (c == 'V' && !scr_on) scr_start();
+        else if (c == 'v' && scr_on) { scr_stop(); return; }
+    }
+    if (!scr_on) return;
+    if (ms_now() - scr_rx_ms > 4000) { scr_stop(); return; }
+    if (set.hdmi_off && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
+    uint32_t st = stat_read();
+    int gbc = st & 1, buf = (st >> 3) & 3;
+    uint16_t fr = (uint16_t)(st >> 16);
+    int mode = gbc | (set.gbc_raw ? 2 : 0) | (set.dmg_pal << 2);
+    if (mode != scr_mode) {
+        scr_mode = mode;
+        scr_hdr('P', 14);
+        scr_put(gbc); scr_put(set.gbc_raw);
+        for (int i = 0; i < 4; i++) { uint32_t v = dmg_pals[set.dmg_pal % 5][i]; scr_put(v >> 16); scr_put(v >> 8); scr_put(v); }
+    }
+    int of = ((ctrl & C_OSD) ? 1 : 0) | ((ctrl & C_DIM) ? 2 : 0);
+    if (of != scr_osd_flags || ((of & 1) && osd_version != scr_osd_ver)) {
+        scr_osd_flags = of; scr_osd_ver = osd_version;
+        scr_cells('O', osd_cells(), OSD_W * OSD_H, of);
+    }
+    if (lcd_version != scr_lcd_ver) {
+        scr_lcd_ver = lcd_version;
+        scr_cells('L', lcd_cells(), LCD_W * LCD_H, of | 1);
+    }
+    if (buf == scr_buf && fr == scr_frame) return;
+    scr_buf = buf; scr_frame = fr;
+    volatile uint32_t *fb = (volatile uint32_t *)sdram(FB_BASE + (uint32_t)buf * 0x10000);
+    volatile uint32_t *prev = (volatile uint32_t *)sdram(SCR_PREV);
+    static uint16_t row[160];
+    static uint8_t pk[160 * 3 + 4];
+    for (int y = 0; y < 144; y++) {
+        volatile uint32_t *f = fb + y * 80, *p = prev + y * 80;
+        int x = 0;
+        while (x < 80 && f[x] == p[x]) x++;
+        if (x == 80) continue;
+        for (int i = 0; i < 80; i++) {
+            uint32_t w = f[i];
+            p[i] = w;
+            row[i * 2] = (uint16_t)(w & 0x7FFF); row[i * 2 + 1] = (uint16_t)((w >> 16) & 0x7FFF);
+        }
+        int n = scr_pack(row, pk);
+        scr_hdr('G', 1 + n);
+        scr_put(y);
+        for (int i = 0; i < n; i++) scr_put(pk[i]);
+    }
+    scr_hdr('F', 2);
+    scr_put(fr); scr_put(fr >> 8);
+}
+
 // ================================================================ input
 static uint32_t held, rep_t;
 static uint32_t last_input_ms;
@@ -1424,6 +1541,8 @@ static uint32_t poll_keys(uint32_t timeout) {
         uint32_t dp = cur & (K_UP | K_DOWN | K_LEFT | K_RIGHT);
         uint32_t t = timeout;
         if (dp) { int32_t d = (int32_t)(rep_t - ms_now()); t = d > 0 ? (uint32_t)d : 1; if (t > timeout) t = timeout; }
+        scr_poll();
+        if (scr_on && t > 8) t = 8;
         REG_WAIT = t;
         (void)REG_WAIT;
         cur = REG_IN & 0xFFFF;
@@ -3298,7 +3417,8 @@ int main(void) {
     last_input_ms = ms_now();
     held = REG_IN & 0xFFFF;
     for (;;) {
-        REG_WAIT = (held & (K_S1 | K_S2)) ? 50 : set.poll_slow ? 500 : 200;
+        scr_poll();
+        REG_WAIT = scr_on ? 8 : (held & (K_S1 | K_S2)) ? 50 : set.poll_slow ? 500 : 200;
         (void)REG_WAIT;
         uint32_t in = REG_IN & 0xFFFF;
         uint32_t now = ms_now();

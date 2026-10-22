@@ -25,6 +25,7 @@
 #define IOCTL_ADDR  IO(0x40)
 #define IOCTL_DATA  IO(0x44)
 #define REG_DEEPWAIT IO(0x48)  // like REG_WAIT, and the SDRAM self-refreshes meanwhile (core paused)
+#define REG_UART    IO(0x68)   // read: [11] byte received (clears) [7:0] the byte; write: [11:0] bit time in clocks (TX and RX)
 #define REG_GPIO    IO(0x64)   // write: [0] SCL low [1] SDA low [2] I2C on (pins 15/16); read: [0] SCL [1] SDA [2] USB power
 #define REG_PRN     IO(0x60)   // printer: read [8] byte ready [7:0] byte (clears); write: answer two bytes on
 #define REG_BEEP    IO(0x4C)   // menu sound: [11:0] half period in 4 us steps, [27:16] ms; a change starts it

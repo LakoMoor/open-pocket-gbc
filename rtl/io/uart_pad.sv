@@ -10,13 +10,14 @@ module uart_pad #(
     input             clk,
     input             reset,
     input             rx,
+    input      [11:0] div,          // bit time in clocks (CLK_HZ / BAUD by default, set by the firmware)
     output reg [11:0] pad,          // {R L X A RIGHT LEFT DOWN UP START SELECT Y B}
     output reg        key_menu,
     output reg        key_reset,
-    output            rx_seen       // one clock per received byte (remote activity)
+    output            rx_seen,      // one clock per received byte (remote activity)
+    output     [7:0]  rx_byte       // the byte, valid with rx_seen
 );
 
-localparam integer DIV = CLK_HZ / BAUD;
 
 reg [2:0]  rx_s = 3'b111;
 always @(posedge clk) rx_s <= {rx_s[1:0], rx};
@@ -33,11 +34,11 @@ always @(posedge clk) begin
     if (reset) begin
         busy <= 0;
     end else if (!busy) begin
-        if (!rxd) begin busy <= 1; cnt <= DIV / 2; bitn <= 0; end
+        if (!rxd) begin busy <= 1; cnt <= div[11:1]; bitn <= 0; end
     end else if (cnt != 0) begin
         cnt <= cnt - 1'd1;
     end else begin
-        cnt <= DIV - 1;
+        cnt <= div - 1'd1;
         bitn <= bitn + 1'd1;
         case (bitn)
             4'd0: if (rxd) busy <= 0;                     // false start bit
@@ -48,6 +49,7 @@ always @(posedge clk) begin
 end
 
 assign rx_seen = strobe;
+assign rx_byte = data;
 wire press = (data >= "A") && (data <= "Z");
 wire [7:0] up = press ? data : data - 8'h20;
 always @(posedge clk) begin

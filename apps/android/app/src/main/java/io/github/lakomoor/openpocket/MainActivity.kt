@@ -163,9 +163,30 @@ fun RemoteScreen() {
         lcd = renderCells(font, r.first, 16, 128, 128, 4)
         osd = renderCells(font, r.second, 42, 336, 240, 0)
     }
-    LaunchedEffect(auto) { while (auto) { shot(); delay(2000) } }
+    // live: the firmware streams the real picture (game and menu) at ~2 Mbaud
+    val live by Board.live.collectAsState()
+    val tick by LiveScreen.frame.collectAsState()
+    val hdmiBmp = remember { Bitmap.createBitmap(720, 480, Bitmap.Config.ARGB_8888) }
+    val lcdBmp = remember { Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888) }
+    var liveHdmi by remember { mutableStateOf<ImageBitmap?>(null) }
+    var liveLcd by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(Unit) { LiveScreen.font = font }
+    LaunchedEffect(auto) {
+        if (auto) { Board.startScreen(); note = "Waiting for the picture (needs firmware and bitstream 1.3)…" } else Board.stopScreen()
+    }
+    LaunchedEffect(tick) {
+        if (!live) return@LaunchedEffect
+        LiveScreen.renderHdmi(hdmiBmp); LiveScreen.renderLcd(lcdBmp)
+        liveHdmi = hdmiBmp.asImageBitmap(); liveLcd = lcdBmp.asImageBitmap()
+        note = "live · %.0f fps".format(LiveScreen.fps)
+    }
+    DisposableEffect(Unit) { onDispose { Board.stopScreen() } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (live && liveHdmi != null) {
+            Screen(liveHdmi, Modifier.fillMaxWidth().aspectRatio(720f / 480f), tick)
+            Spacer(Modifier.height(8.dp))
+            Screen(liveLcd, Modifier.width(128.dp).aspectRatio(1f), tick)
+        } else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Screen(lcd, Modifier.weight(0.42f).aspectRatio(1f))
             Screen(osd, Modifier.weight(0.58f).aspectRatio(336f / 240f))
         }
@@ -208,9 +229,10 @@ fun RemoteScreen() {
 }
 
 @Composable
-private fun Screen(img: ImageBitmap?, mod: Modifier) {
+private fun Screen(img: ImageBitmap?, mod: Modifier, tick: Int = 0) {
     Box(mod.clip(RoundedCornerShape(12.dp)).background(Color.Black).border(1.dp, Line, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-        if (img != null) Image(img, null, Modifier.fillMaxSize(), filterQuality = FilterQuality.None)
+        // the bitmap is reused between frames: `tick` makes Compose redraw it
+        if (img != null) key(tick) { Image(img, null, Modifier.fillMaxSize(), filterQuality = FilterQuality.None) }
     }
 }
 

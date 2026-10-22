@@ -81,7 +81,7 @@ h1 { font-size: 60px; line-height: 1; font-weight: 500; letter-spacing: -0.05em;
 .screens { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
 canvas.scr { background: var(--ink); border-radius: 10px; box-shadow: 0 0 0 1px var(--hair); image-rendering: pixelated; }
 #lcd { width: 256px; height: 256px; }
-#osd { width: 504px; height: 360px; }
+#osd { width: 540px; height: 360px; }
 label.hint input { accent-color: #fff; }
 
 .gb { display: grid; grid-template-columns: 190px 1fr 190px; align-items: center; margin-top: 30px; user-select: none; }

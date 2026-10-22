@@ -191,12 +191,46 @@ async function connect() {
       resolve(true);
     });
     port.on('data', onData);
-    port.on('close', () => { port = null; send('status', null); });
+    port.on('close', () => { port = null; scrOn = false; scrFast = false; send('status', null); });
     port.on('error', e => log(`serial: ${e.message}\n`));
   });
 }
+// ---- live screen: 'V' makes the firmware switch to ~2 Mbaud and stream the picture (fw scr_poll)
+let scrOn = false, scrFast = false, scrTimer = null, scrPk = [];
+const pk = { st: 0, type: 0, len: 0, pos: 0, buf: null };
+function screen(on) {
+  if (on === scrOn) return;
+  scrOn = on;
+  if (on) {
+    port.write('V');
+    let n = 0;
+    scrTimer = setInterval(() => { if (port && port.isOpen) port.write(!scrFast && ++n % 2 === 0 ? 'V' : '.'); }, 1000);
+  } else {
+    clearInterval(scrTimer); scrTimer = null;
+    if (port && port.isOpen) { port.write('v'); setTimeout(() => { if (port && port.isOpen) port.update({ baudRate: 115200 }); scrFast = false; }, 60); }
+  }
+}
+function onBinary(d) {
+  let text = '';
+  for (const v of d) {
+    switch (pk.st) {
+      case 0: if (v === 0) pk.st = 1; else text += String.fromCharCode(v); break;
+      case 1: pk.type = v; pk.st = 2; break;
+      case 2: pk.len = v; pk.st = 3; break;
+      case 3: pk.len |= v << 8; pk.pos = 0; pk.buf = new Uint8Array(pk.len); pk.st = pk.len ? 4 : 0; if (!pk.len) scrPk.push([pk.type, pk.buf]); break;
+      case 4: pk.buf[pk.pos++] = v; if (pk.pos === pk.len) { scrPk.push([pk.type, pk.buf]); pk.st = 0; if (pk.type === 70) { send('scr', scrPk); scrPk = []; } } break;
+    }
+  }
+  if (scrPk.length > 40) { send('scr', scrPk); scrPk = []; }
+  return text;
+}
 function onData(d) {
+  if (scrFast) { const t = onBinary(d); if (!t) return; d = Buffer.from(t, 'latin1'); }
   rx += d.toString('latin1');
+  if (scrOn && !scrFast && rx.includes('#SCR ')) {
+    scrFast = true;
+    port.update({ baudRate: 2000000 }, e => log(e ? `serial: ${e.message}\n` : 'screen stream at 2 Mbaud\n'));
+  }
   if (dumpWait) {
     if (rx.includes('OSD-END')) { const r = rx; rx = ''; dumpWait(r); dumpWait = null; }
     return;
@@ -235,6 +269,7 @@ function fileInfo() {
 }
 ipcMain.handle('status', async () => ({ port: await findPort(), connected: !!(port && port.isOpen), build: fileInfo(), drives: await removableDrives() }));
 ipcMain.handle('install', (_, items) => { install(items); return true; });
+ipcMain.handle('screen', async (_, on) => { if (on && !(await connect())) return false; if (port) screen(on); return true; });
 ipcMain.handle('install-build', (_, which) => {
   const items = which === 'all' ? [{ kind: 'bitstream', file: BUILD.bitstream }, { kind: 'firmware', file: BUILD.firmware }]
     : which === 'sram' ? [{ kind: 'sram', file: BUILD.bitstream }] : [{ kind: which, file: BUILD[which] }];

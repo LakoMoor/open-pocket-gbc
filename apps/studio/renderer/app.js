@@ -147,7 +147,89 @@ async function shot() {
   draw($('#osd'), r.osd, 42, 0);
 }
 $('#shot').onclick = shot;
-setInterval(() => { if ($('#auto').checked && $('#p-remote').classList.contains('on')) shot(); }, 2000);
+
+// live picture: the firmware streams the Game Boy frame (changed rows, PackBits) and the menu
+// text layers at ~2 Mbaud; composed here like the HDMI output (game 3x, OSD on top) and the LCD
+const live = { fb: new Uint16Array(160 * 144), osd: new Uint16Array(42 * 24), lcd: new Uint16Array(16 * 12),
+  osdFlags: 0, gbc: 1, raw: 0, dmg: [0xF8F8F8, 0xA8A8A8, 0x585858, 0x101010], frames: 0, t: 0, fps: 0, dirty: false };
+function liveRgb(v) {
+  if (!live.gbc) return live.dmg[v & 3];
+  const r5 = v & 31, g5 = (v >> 5) & 31, b5 = (v >> 10) & 31;
+  if (live.raw) return ((r5 << 3 | r5 >> 2) << 16) | ((g5 << 3 | g5 >> 2) << 8) | (b5 << 3 | b5 >> 2);
+  return Math.min(255, (r5 * 26 + g5 * 4 + b5 * 2) >> 2) << 16 | Math.min(255, (g5 * 24 + b5 * 8) >> 2) << 8 | Math.min(255, (r5 * 6 + g5 * 4 + b5 * 22) >> 2);
+}
+function liveCells(p, dst) { for (let i = 0; i < dst.length && 2 + i * 2 < p.length; i++) dst[i] = p[1 + i * 2] | p[2 + i * 2] << 8; }
+S.on('scr', list => {
+  for (const [t, p] of list) {
+    if (t === 80) { live.gbc = p[0]; live.raw = p[1]; for (let i = 0; i < 4; i++) live.dmg[i] = p[2 + i * 3] << 16 | p[3 + i * 3] << 8 | p[4 + i * 3]; }
+    else if (t === 79) { live.osdFlags = p[0]; liveCells(p, live.osd); }
+    else if (t === 76) liveCells(p, live.lcd);
+    else if (t === 71) {
+      const y = p[0], b = y * 160; let k = 1, x = 0;
+      while (k < p.length && x < 160) {
+        const c = p[k++];
+        if (c < 128) for (let n = 0; n <= c && x < 160; n++, k += 2) live.fb[b + x++] = p[k] | p[k + 1] << 8;
+        else { const v = p[k] | p[k + 1] << 8; k += 2; for (let n = 0; n < c - 126 && x < 160; n++) live.fb[b + x++] = v; }
+      }
+    } else if (t === 70) {
+      live.frames++;
+      const now = performance.now();
+      if (now - live.t > 1000) { live.fps = live.frames * 1000 / (now - live.t); live.frames = 0; live.t = now; }
+    }
+  }
+  live.dirty = true;
+});
+function liveDrawCells(img, w, h, cells, cols, rows, ox, oy, sc) {
+  const d = img.data;
+  for (let cy = 0; cy < rows; cy++) for (let cx = 0; cx < cols; cx++) {
+    const v = cells[cy * cols + cx], attr = v >> 8, ch = v & 0xFF, code = ch & 0x7F, ext = ch & 0x80;
+    for (let py = 0; py < 10; py++) {
+      const fy = py - 1;
+      const bits = fy < 0 || fy > 7 ? (ext ? font[code * 8 + (fy < 0 ? 0 : 7)] : 0) : font[code * 8 + fy];
+      for (let px = 0; px < 8; px++) {
+        const ci = (bits >> (7 - px)) & 1 ? attr & 15 : attr >> 4;
+        if (!ci) continue;
+        const c = PAL[ci];
+        for (let sy = 0; sy < sc; sy++) for (let sx = 0; sx < sc; sx++) {
+          const x = ox + (cx * 8 + px) * sc + sx, y = oy + (cy * 10 + py) * sc + sy;
+          if (x >= w || y >= h) continue;
+          const o = (y * w + x) * 4; d[o] = c >> 16; d[o + 1] = (c >> 8) & 255; d[o + 2] = c & 255; d[o + 3] = 255;
+        }
+      }
+    }
+  }
+}
+function liveRender() {
+  requestAnimationFrame(liveRender);
+  if (!live.dirty || !$('#auto').checked) return;
+  live.dirty = false;
+  const oc = $('#osd'), lc = $('#lcd');
+  if (oc.width !== 720) { oc.width = 720; oc.height = 480; }
+  const dim = (live.osdFlags & 3) === 3, k = dim ? 0.4 : 1;
+  const g = oc.getContext('2d'), img = g.createImageData(720, 480), d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+  for (let y = 0; y < 144; y++) for (let x = 0; x < 160; x++) {
+    const c = liveRgb(live.fb[y * 160 + x]), r = (c >> 16) * k, gg = ((c >> 8) & 255) * k, b = (c & 255) * k;
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) { const o = ((24 + y * 3 + sy) * 720 + 120 + x * 3 + sx) * 4; d[o] = r; d[o + 1] = gg; d[o + 2] = b; }
+  }
+  if (live.osdFlags & 1) liveDrawCells(img, 720, 480, live.osd, 42, 24, 24, 0, 2);
+  g.putImageData(img, 0, 0);
+  const lg = lc.getContext('2d'), li = lg.createImageData(128, 128), ld = li.data;
+  for (let i = 3; i < ld.length; i += 4) ld[i] = 255;
+  for (let y = 0; y < 115; y++) for (let x = 0; x < 128; x++) {
+    const c = liveRgb(live.fb[((y * 144 / 115) | 0) * 160 + ((x * 160 / 128) | 0)]), o = ((y + 6) * 128 + x) * 4;
+    ld[o] = (c >> 16) * k; ld[o + 1] = ((c >> 8) & 255) * k; ld[o + 2] = (c & 255) * k;
+  }
+  if (live.osdFlags & 1) liveDrawCells(li, 128, 128, live.lcd, 16, 12, 0, 4, 1);
+  lg.putImageData(li, 0, 0);
+  $('#livefps').textContent = `live · ${live.fps.toFixed(0)} fps`;
+}
+requestAnimationFrame(liveRender);
+$('#auto').onchange = async e => {
+  const ok = await S.screen(e.target.checked);
+  if (!ok) { e.target.checked = false; log('(no board on USB)\n'); return; }
+  $('#livefps').textContent = e.target.checked ? 'waiting for the picture (firmware and bitstream 1.3)…' : '';
+};
 
 // ---------------------------------------------------------------- remote: buttons
 document.querySelectorAll('.k').forEach(b => {

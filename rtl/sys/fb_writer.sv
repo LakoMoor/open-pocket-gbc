@@ -18,6 +18,7 @@ module fb_writer #(
     // triple buffer control
     input             vs_event,        // display side starts a new frame (one cycle)
     output reg  [1:0] rd_buf,          // buffer the display reads
+    output      [1:0] newest,          // the last complete frame (screenshots, screen stream; also with HDMI off)
 
     // write requests to SDRAM
     output            wq_empty,
@@ -103,6 +104,7 @@ end
 
 // ---------------------------------------------------------------- triple buffering
 reg [1:0] wr_buf, done_buf;
+assign newest = done_buf;
 always @(posedge clk) begin
     if (reset) begin
         wr_buf   <= 2'd0;

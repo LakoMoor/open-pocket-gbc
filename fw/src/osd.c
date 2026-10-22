@@ -6,6 +6,7 @@ static uint16_t back[OSD_W * OSD_H];
 static uint16_t front[OSD_W * OSD_H];
 static uint16_t lback[LCD_W * LCD_H], lfront[LCD_W * LCD_H];
 static int      front_valid, lfront_valid;
+uint32_t        osd_version, lcd_version;     // bumped when the shown cells change (screen stream)
 
 void osd_clear(uint8_t attr) {
     uint16_t v = ((uint16_t)attr << 8) | ' ';
@@ -51,6 +52,7 @@ void osd_present(void) {
         if (!front_valid || front[i] != back[i]) {
             front[i] = back[i];
             OSD_RAM[i] = back[i];
+            osd_version++;
         }
     }
     front_valid = 1;
@@ -115,11 +117,15 @@ void lcd_dump(void) {
     logf("OSD-END\n");
 }
 
+const uint16_t *osd_cells(void) { return front; }
+const uint16_t *lcd_cells(void) { return lfront; }
+
 void lcd_present(void) {
     for (int i = 0; i < LCD_W * LCD_H; i++) {
         if (!lfront_valid || lfront[i] != lback[i]) {
             lfront[i] = lback[i];
             LCD_TXT[i] = lback[i];
+            lcd_version++;
         }
     }
     lfront_valid = 1;

@@ -37,3 +37,6 @@ void lcd_pill(int y, uint8_t fill, uint8_t outside);         // full width
 void lcd_pillx(int x, int y, int w, uint8_t fill, uint8_t outside);
 void lcd_dump(void);                                         // text buffer to the log
 void lcd_present(void);
+const uint16_t *osd_cells(void);                             // the cells shown now
+const uint16_t *lcd_cells(void);
+extern uint32_t osd_version, lcd_version;

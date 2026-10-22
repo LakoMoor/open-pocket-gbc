@@ -22,6 +22,31 @@ The Tang Nano 20K's USB-C port also carries a serial port from the on-board BL61
 
 The remote is OR-ed with the DualShock and the GPIO buttons. The menu and reset keys go through the same 2 ms debounce as S1/S2, so hold them for at least ~10 ms.
 
+## Live screen
+
+Studio (Remote → live picture) and the Android app (Remote → live) show the board's real picture: the running game and the menu, composed like the HDMI output and the LCD. This needs firmware and bitstream 1.3. The UART bit time became a register (`REG_UART`, 0x68), so the link can run faster than 115200.
+
+**Handshake:**
+1. The app sends `V` at 115200.
+2. The firmware answers `#SCR 1985294`, then switches TX and the remote's RX to 1.985 Mbaud (33.75 MHz / 17).
+3. The app reopens the port at 2 Mbaud. Button characters keep working at that rate.
+4. The app sends `.` every second. After 4 s without a byte, or after `v`, the firmware goes back to 115200.
+
+**Packets:** `0x00`, type, u16 length (little endian), payload. Log text still arrives between packets.
+
+| Type | Payload |
+|---|---|
+| `P` | gbc, gbc_raw, DMG palette (4 × RGB): how to turn pixels into colours |
+| `O` | flags (1 = OSD shown, 2 = dimmed), then 42 × 24 OSD cells (u16: attr, char) when shown |
+| `L` | flags, then the 16 × 12 LCD text cells |
+| `G` | a changed row: y, then PackBits over 160 u16 pixels. A control byte c < 128 means c + 1 literal pixels follow; c ≥ 128 means c − 126 copies of the next pixel. |
+| `F` | end of frame: u16 frame counter |
+
+**Pixels and speed:**
+- Pixels come straight from the framebuffer: GBC 15-bit colour, or a DMG shade in bits 1:0.
+- Only rows that changed since the last frame are sent. A still screen costs nothing, and a typical game sends a few rows per frame.
+- A full redraw (scrolling, a scene change) is about 20–45 KB, roughly 0.1–0.25 s at 2 Mbaud. That is the floor on latency: USB-UART is the only data path to the PC.
+
 ## tools/remote.py
 
 Requires `pip install pyserial`. The port is found automatically (VID 0403, PID 6010); use `--port COM6` to override.

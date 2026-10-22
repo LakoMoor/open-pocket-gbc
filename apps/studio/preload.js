@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('studio', {
   rtlStart: opts => ipcRenderer.invoke('rtl-start', opts),
   rtlKey: bits => ipcRenderer.invoke('rtl-key', bits),
   rtlRemote: ch => ipcRenderer.invoke('rtl-remote', ch),
+  screen: on => ipcRenderer.invoke('screen', on),
   rtlStop: () => ipcRenderer.invoke('rtl-stop'),
   on: (ch, fn) => ipcRenderer.on(ch, (_, d) => fn(d)),
 });

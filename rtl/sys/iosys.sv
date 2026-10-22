@@ -57,6 +57,8 @@ module iosys #(
     input             stat_2x,
     input       [1:0] stat_buf,
     input             uart_seen,    // a byte came over the USB-UART (remote control)
+    input       [7:0] uart_byte,    // ... and which one (for the screen stream handshake)
+    output reg [11:0] uart_div,     // UART bit time in clocks, TX and RX (115200 by default)
     input       [2:0] gpio_in,      // {charger, sda, scl}
     output reg  [2:0] gpio_out,     // {i2c on, sda low, scl low}     // framebuffer the display reads (the newest complete frame)
     input             cram_wr,      // cartridge RAM write strobe (level)
@@ -169,6 +171,8 @@ spi_port #(.DIV0(8'd1)) u_ct (.clk(clk), .reset(reset), .valid(mem_valid & sel_c
 
 // ------------------------------------------------------------ UART TX (115200 8N1)
 localparam UDIV = CLK_HZ / 115200;
+reg  [7:0] rx_byte;
+reg        rx_new;
 reg  [9:0] u_sh = 10'h3FF;
 reg  [3:0] u_n;
 reg [11:0] u_cnt;
@@ -218,6 +222,7 @@ always @* begin
             6'h02: mem_rdata = ms;
             6'h03: mem_rdata = {frames, 10'd0, remote, stat_buf, dirty, stat_2x, stat_gbc};
             6'h19: mem_rdata = {29'd0, gpio_in};
+            6'h1A: mem_rdata = {20'd0, rx_new, 3'd0, rx_byte};
             6'h0C: mem_ready = ~u_busy;
             6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout; mem_rdata = {31'd0, ev}; end
             6'h0E: mem_rdata = ctrl;
@@ -272,7 +277,7 @@ always @(posedge clk) begin
         prn_idle <= prn_idle + 1'd1;
         if (prn_idle == 16'd40000) prn_n <= 0;      // ~1.2 ms without a clock: resynchronise
     end
-    if (uart_seen) remote <= 1;
+    if (uart_seen) begin remote <= 1; rx_byte <= uart_byte; rx_new <= 1; end
     cram_d <= cram_wr;
     if (cram_wr & ~cram_d) dirty <= 1;
     if (frame_tick) frames <= frames + 1'd1;
@@ -280,7 +285,7 @@ always @(posedge clk) begin
     // UART
     if (u_n != 0) begin
         if (u_cnt == 0) begin
-            u_cnt <= UDIV - 1;
+            u_cnt <= uart_div - 1'd1;
             u_sh  <= {1'b1, u_sh[9:1]};
             u_n   <= u_n - 1'd1;
         end else u_cnt <= u_cnt - 1'd1;
@@ -289,7 +294,7 @@ always @(posedge clk) begin
 
     if (fire && is_io) begin
         if (is_wr) case (reg_a)
-            6'h0C: begin u_sh <= {1'b1, mem_wdata[7:0], 1'b0}; u_n <= 4'd10; u_cnt <= UDIV - 1; end
+            6'h0C: begin u_sh <= {1'b1, mem_wdata[7:0], 1'b0}; u_n <= 4'd10; u_cnt <= uart_div - 1'd1; end
             6'h0D, 6'h12: begin wait_cnt <= mem_wdata[15:0]; ev <= 0; end
             6'h0E: ctrl <= mem_wdata;
             6'h0F: cfg  <= mem_wdata;
@@ -298,10 +303,12 @@ always @(posedge clk) begin
             6'h13: beep <= mem_wdata;
             6'h18: prn_tx <= mem_wdata[7:0];
             6'h19: gpio_out <= mem_wdata[2:0];
+            6'h1A: uart_div <= mem_wdata[11:0];
             default: ;
         endcase else case (reg_a)
             6'h03: begin dirty <= 0; remote <= 0; end
             6'h18: prn_valid <= 0;
+            6'h1A: rx_new <= 0;
             6'h0D, 6'h12: ev <= 0;
             default: ;
         endcase
@@ -323,6 +330,7 @@ always @(posedge clk) begin
         ctrl   <= 32'h0000_0001;          // core held in reset until a game is loaded
         cfg    <= 32'h0000_0000;
         u_n    <= 0; u_sh <= 10'h3FF;
+        uart_div <= UDIV[11:0]; rx_new <= 0;
         ev     <= 0; dirty <= 0;
         ms     <= 0; ms_div <= 0; wait_cnt <= 0;
     end
