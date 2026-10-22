@@ -172,7 +172,11 @@ fun RemoteScreen() {
     var liveLcd by remember { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(Unit) { LiveScreen.font = font }
     LaunchedEffect(auto) {
-        if (auto) { Board.startScreen(); note = "Waiting for the picture (needs firmware and bitstream 1.3)…" } else Board.stopScreen()
+        if (!auto) { Board.stopScreen(); note = ""; return@LaunchedEffect }
+        Board.startScreen()
+        note = "Asking the board for the live picture…"
+        delay(4000)
+        if (!Board.streaming) note = "The board did not answer: the live picture needs bitstream and firmware 1.3 on the board. Install both: Update › Install over USB, or SD card › System Update."
     }
     LaunchedEffect(tick) {
         if (!live) return@LaunchedEffect

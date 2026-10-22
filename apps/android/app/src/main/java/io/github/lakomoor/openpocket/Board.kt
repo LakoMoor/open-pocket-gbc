@@ -99,6 +99,7 @@ object Board : SerialInputOutputManager.Listener {
     private val _live = MutableStateFlow(false)
     val live = _live.asStateFlow()
     @Volatile private var fast = false
+    val streaming get() = fast             // the firmware answered "#SCR" and the port runs at 2 Mbaud
     private var keepalive: Thread? = null
 
     fun startScreen() {
