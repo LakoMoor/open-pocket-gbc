@@ -131,6 +131,7 @@ object Board : SerialInputOutputManager.Listener {
         writer.execute {
             try {
                 port?.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                port?.write(".".toByteArray(), 200)       // the firmware starts sending once a byte arrives at the new rate
                 fast = true
                 appendLog("screen stream at $baud baud\n")
             } catch (e: Exception) { appendLog("USB: can't set $baud baud: ${e.message}\n"); _live.value = false }

@@ -230,7 +230,10 @@ function onData(d) {
   rx += d.toString('latin1');
   if (scrOn && !scrFast && rx.includes('#SCR ')) {
     scrFast = true;
-    port.update({ baudRate: 2000000 }, e => log(e ? `serial: ${e.message}\n` : 'screen stream at 2 Mbaud\n'));
+    port.update({ baudRate: 2000000 }, e => {
+      log(e ? `serial: ${e.message}\n` : 'screen stream at 2 Mbaud\n');
+      if (!e && port && port.isOpen) port.write('.');      // the firmware starts sending once a byte arrives at the new rate
+    });
   }
   if (dumpWait) {
     if (rx.includes('OSD-END')) { const r = rx; rx = ''; dumpWait(r); dumpWait = null; }

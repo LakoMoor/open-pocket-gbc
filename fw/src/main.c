@@ -1421,12 +1421,13 @@ static void reset_game(void) {
 //   'P' mode: gbc, gbc_raw, dmg palette (4 x RGB)       'O' OSD: flags (1 shown, 2 dim), 42x24 cells
 //   'L' LCD text: flags, 16x12 cells                   'G' a changed row: y, PackBits of 160 x u16
 //   'F' end of frame: u16 frame counter
-#define SCR_PREV  0x770000u            // the frame as last sent (160 x 144 x 2 bytes)
 #define UDIV_SLOW (33750000 / 115200)
 #define UDIV_FAST 17                   // 1.985 Mbaud
 static int      scr_on, scr_buf = -1, scr_mode = -1, scr_osd_flags = -1;
 static uint32_t scr_rx_ms, scr_osd_ver, scr_lcd_ver, scr_keep_ctrl;
 static uint16_t scr_frame;
+static uint32_t scr_hash[144];        // per row, of the frame as last sent
+static int      scr_fix;
 
 static inline void scr_put(uint32_t b) { UART_TX = (uint8_t)b; }
 static void scr_hdr(char t, uint32_t len) { scr_put(0); scr_put(t); scr_put(len); scr_put(len >> 8); }
@@ -1435,12 +1436,11 @@ static void scr_start(void) {
     logf("#SCR %u\n", 33750000u / UDIV_FAST);
     wait_ms(40);                       // the app reopens the port at the new rate
     REG_UART = UDIV_FAST;
-    scr_on = 1;
+    scr_on = 2;                        // quiet until a byte arrives at the new rate
     scr_rx_ms = ms_now();
     scr_buf = scr_mode = scr_osd_flags = -1;
     scr_osd_ver = scr_lcd_ver = ~0u;
-    volatile uint32_t *p = (volatile uint32_t *)sdram(SCR_PREV);
-    for (int i = 0; i < 160 * 144 / 2; i++) p[i] = 0xFFFFFFFFu;      // every row counts as changed
+    for (int i = 0; i < 144; i++) scr_hash[i] = 0x5A5A5A5Au;           // every row counts as changed
     scr_keep_ctrl = ctrl & C_FB_FORCE;
 }
 static void scr_stop(void) {
@@ -1451,24 +1451,43 @@ static void scr_stop(void) {
     ctrl_write();
 }
 
-// PackBits on 16-bit pixels: c < 128: c + 1 literal pixels follow; c >= 128: c - 126 copies of one
-static int scr_pack(const uint16_t *px, uint8_t *out) {
-    int i = 0, o = 0;
-    while (i < 160) {
-        int r = 1;
-        while (i + r < 160 && r < 129 && px[i + r] == px[i]) r++;
-        if (r >= 2) {
-            out[o++] = (uint8_t)(r + 126); out[o++] = (uint8_t)px[i]; out[o++] = (uint8_t)(px[i] >> 8);
-            i += r;
-            continue;
-        }
-        int s = i, n = 0;
-        while (i < 160 && n < 128 && !(i + 1 < 160 && px[i + 1] == px[i])) { i++; n++; }
-        out[o++] = (uint8_t)(n - 1);
-        for (int k = s; k < s + n; k++) { out[o++] = (uint8_t)px[k]; out[o++] = (uint8_t)(px[k] >> 8); }
-    }
-    return o;
+// Rows are compared by a hash (h * 33 ^ word); one row per frame is sent anyway, so a collision
+// heals within 144 frames. The CPU runs from SDRAM at about 1 us per access: these loops are
+// written for few instructions per word.
+__attribute__((optimize("O2", "unroll-loops"))) static uint32_t scr_row_hash(const volatile uint32_t *f) {
+    uint32_t h = 5381;
+    for (int i = 0; i < 80; i++) h = ((h << 5) + h) ^ f[i];
+    return h;
 }
+
+// PackBits over whole words (pixel pairs; bit 15 of a pixel is always 0): a run is two or more
+// equal words whose pixels match (c = pixels + 126), a literal is up to 64 words (c = pixels - 1).
+#define SCR_RUN(f, i, w) (!(((w) ^ ((w) >> 16)) & 0xFFFF) && (i) < 79 && (f)[(i) + 1] == (w))
+__attribute__((always_inline)) static inline int scr_enc(const volatile uint32_t *f, const int emit) {
+    int i = 0, n = 0;
+    while (i < 80) {
+        uint32_t w = f[i];
+        int j;
+        if (SCR_RUN(f, i, w)) {
+            j = i + 2;
+            while (j < 80 && j - i < 64 && f[j] == w) j++;
+            n += 3;
+            if (emit) { scr_put(2 * (j - i) + 126); scr_put(w); scr_put(w >> 8); }
+        } else {
+            j = i + 1;
+            while (j < 80 && j - i < 64) { uint32_t v = f[j]; if (SCR_RUN(f, j, v)) break; j++; }
+            n += 1 + 4 * (j - i);
+            if (emit) {
+                scr_put(2 * (j - i) - 1);
+                for (int k = i; k < j; k++) { uint32_t v = f[k]; scr_put(v); scr_put(v >> 8); scr_put(v >> 16); scr_put(v >> 24); }
+            }
+        }
+        i = j;
+    }
+    return n;
+}
+__attribute__((noinline, optimize("O2"))) static int  scr_enc_len(const volatile uint32_t *f)  { return scr_enc(f, 0); }
+__attribute__((noinline, optimize("O2"))) static void scr_enc_send(const volatile uint32_t *f) { scr_enc(f, 1); }
 
 static void scr_cells(char t, const uint16_t *c, int n, int flags) {
     scr_hdr(t, 1 + (flags & 1 ? n * 2 : 0));
@@ -1481,11 +1500,13 @@ static void scr_poll(void) {
     if (r & 0x800) {
         uint8_t c = (uint8_t)r;
         scr_rx_ms = ms_now();
-        if (c == 'V' && !scr_on) scr_start();
+        if (c == 'V' && !scr_on) { scr_start(); return; }
         else if (c == 'v' && scr_on) { scr_stop(); return; }
+        else if (scr_on == 2) scr_on = 1;
     }
     if (!scr_on) return;
     if (ms_now() - scr_rx_ms > 4000) { scr_stop(); return; }
+    if (scr_on == 2) return;
     if (set.hdmi_off && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
     uint32_t st = stat_read();
     int gbc = st & 1, buf = (st >> 3) & 3;
@@ -1508,25 +1529,27 @@ static void scr_poll(void) {
     }
     if (buf == scr_buf && fr == scr_frame) return;
     scr_buf = buf; scr_frame = fr;
-    volatile uint32_t *fb = (volatile uint32_t *)sdram(FB_BASE + (uint32_t)buf * 0x10000);
-    volatile uint32_t *prev = (volatile uint32_t *)sdram(SCR_PREV);
-    static uint16_t row[160];
-    static uint8_t pk[160 * 3 + 4];
+    const volatile uint32_t *fb = (const volatile uint32_t *)sdram(FB_BASE + (uint32_t)buf * 0x10000);
+    static uint32_t T0, Tc, Tp, Tu, NR, NF; uint32_t t1 = ms_now(), t2;
+    if (!T0) T0 = t1;
+    scr_fix = scr_fix < 143 ? scr_fix + 1 : 0;
     for (int y = 0; y < 144; y++) {
-        volatile uint32_t *f = fb + y * 80, *p = prev + y * 80;
-        int x = 0;
-        while (x < 80 && f[x] == p[x]) x++;
-        if (x == 80) continue;
-        for (int i = 0; i < 80; i++) {
-            uint32_t w = f[i];
-            p[i] = w;
-            row[i * 2] = (uint16_t)(w & 0x7FFF); row[i * 2 + 1] = (uint16_t)((w >> 16) & 0x7FFF);
-        }
-        int n = scr_pack(row, pk);
+        const volatile uint32_t *f = fb + y * 80;
+        uint32_t h = scr_row_hash(f);
+        if (h == scr_hash[y] && y != scr_fix) continue;
+        scr_hash[y] = h;
+        NR++;
+        t2 = ms_now(); Tc += t2 - t1; t1 = t2;
+        int n = scr_enc_len(f);
+        t2 = ms_now(); Tp += t2 - t1; t1 = t2;
         scr_hdr('G', 1 + n);
         scr_put(y);
-        for (int i = 0; i < n; i++) scr_put(pk[i]);
+        scr_enc_send(f);
+        t2 = ms_now(); Tu += t2 - t1; t1 = t2;
     }
+    t2 = ms_now(); Tc += t2 - t1;
+    NF++;
+    if (ms_now() - T0 > 2000) { logf("#T fr %u rows %u hash %u len %u send %u of %u ms\n", NF, NR, Tc, Tp, Tu, ms_now() - T0); T0 = ms_now(); Tc = Tp = Tu = NR = NF = 0; }
     scr_hdr('F', 2);
     scr_put(fr); scr_put(fr >> 8);
 }
