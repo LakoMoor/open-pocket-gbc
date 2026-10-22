@@ -36,6 +36,30 @@ object Release {
         return Info(j.getString("tag_name"), j.optString("name"), j.optString("published_at").take(10), assets)
     }
 
+    /** Downloads one asset to a local file; progress 0..1. */
+    fun download(a: Asset, dest: java.io.File, progress: (Float) -> Unit) {
+        val c = open(a.url)
+        c.setRequestProperty("Accept", "application/octet-stream")
+        if (c.responseCode != 200) throw Exception("GitHub: HTTP ${c.responseCode}")
+        val total = if (c.contentLengthLong > 0) c.contentLengthLong else a.size
+        dest.parentFile?.mkdirs()
+        val tmp = java.io.File(dest.path + ".part")
+        tmp.outputStream().use { out ->
+            c.inputStream.use { inp ->
+                val buf = ByteArray(32768)
+                var got = 0L
+                while (true) {
+                    val n = inp.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    got += n
+                    progress((got.toFloat() / total).coerceIn(0f, 1f))
+                }
+            }
+        }
+        if (!tmp.renameTo(dest)) { dest.delete(); tmp.renameTo(dest) }
+    }
+
     /** Downloads every asset into the chosen folder (the SD card root); progress 0..1. */
     fun saveTo(ctx: Context, tree: Uri, info: Info, progress: (String, Float) -> Unit): List<String> {
         val dir = DocumentFile.fromTreeUri(ctx, tree) ?: throw Exception("Can't open the folder")

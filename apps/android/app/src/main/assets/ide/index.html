@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Open Pocket IDE</title>
+<link rel="stylesheet" href="ide.css">
+</head>
+<body>
+  <div class="seg" id="views"><button class="on" data-v="code">Code</button><button data-v="sim">Simulator</button></div>
+
+  <section id="code" class="view on">
+    <div class="bar">
+      <select id="file"></select>
+      <button id="save" class="pill">Save</button>
+    </div>
+    <div id="editor"></div>
+    <div class="hint" id="src">no sources yet: Get sources or Open folder above</div>
+  </section>
+
+  <section id="sim" class="view">
+    <div class="bar">
+      <button id="run" class="pill primary">Run</button>
+      <button id="reset" class="pill">Reset</button>
+      <span class="hint" id="state">stopped</span>
+    </div>
+    <canvas id="hdmi" width="336" height="240"></canvas>
+    <div class="row">
+      <canvas id="lcd" width="128" height="128"></canvas>
+      <pre id="log"></pre>
+    </div>
+    <div class="pad">
+      <div class="dpad">
+        <span></span><button data-k="16">▲</button><span></span>
+        <button data-k="64">◀</button><span class="hub"></span><button data-k="128">▶</button>
+        <span></span><button data-k="32">▼</button><span></span>
+      </div>
+      <div class="ab"><button class="round" data-k="1">B</button><button class="round" data-k="256">A</button></div>
+    </div>
+    <div class="mid">
+      <button class="small" data-k="4">SELECT</button><button class="small" data-k="4096">MENU</button><button class="small" data-k="8">START</button><button class="small" data-k="8192">RESET</button>
+    </div>
+    <p class="hint">The real fw.bin on a model of the board: menu, settings, flash. The Game Boy core is not emulated. Code edits are built on a PC (fw/build.sh or Studio).</p>
+  </section>
+
+  <script src="sim/cpu.js"></script>
+  <script src="sim/board.js"></script>
+  <script src="sim/sim.js"></script>
+  <script src="monaco/vs/loader.js"></script>
+  <script src="ide.js"></script>
+</body>
+</html>

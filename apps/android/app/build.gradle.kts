@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.lakomoor.openpocket"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
     buildTypes {
         release {
@@ -25,6 +25,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("ideAssets"))
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 }
 
@@ -34,5 +35,22 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.webkit:webkit:1.11.0")
     implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
 }
+
+// The IDE page reuses Studio's board simulator and its Monaco editor (C and a few languages only).
+// Run `npm install` in apps/studio first.
+val studio = rootProject.file("../studio")
+val ideAssets = tasks.register<Copy>("ideAssets") {
+    val monaco = File(studio, "node_modules/monaco-editor/min/vs")
+    doFirst { if (!monaco.isDirectory) throw GradleException("run npm install in apps/studio first (Monaco for the IDE)") }
+    into(layout.buildDirectory.dir("ideAssets/ide"))
+    from(File(studio, "sim")) { include("cpu.js", "board.js", "sim.js"); into("sim") }
+    from(monaco) {
+        include("loader.js", "editor/**", "base/**", "basic-languages/cpp/**", "basic-languages/python/**",
+            "basic-languages/shell/**", "basic-languages/markdown/**")
+        into("monaco/vs")
+    }
+}
+tasks.named("preBuild") { dependsOn(ideAssets) }

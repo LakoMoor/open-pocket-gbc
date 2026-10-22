@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -106,15 +108,16 @@ fun App() {
             Box(Modifier.weight(1f)) {
                 when (tab) {
                     0 -> RemoteScreen()
-                    1 -> UpdateScreen()
+                    1 -> IdeScreen()
+                    2 -> UpdateScreen()
                     else -> LogScreen()
                 }
             }
             Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf("Remote", "Update", "Log").forEachIndexed { i, t ->
+                listOf("Remote", "IDE", "Update", "Log").forEachIndexed { i, t ->
                     Text(t, color = if (tab == i) Color(0xFF111111) else Dim, fontWeight = if (tab == i) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier.clip(RoundedCornerShape(50)).background(if (tab == i) PillC else Color.Transparent)
-                            .clickable { tab = i }.padding(horizontal = 22.dp, vertical = 9.dp))
+                            .clickable { tab = i }.padding(horizontal = 16.dp, vertical = 9.dp))
                 }
             }
         }
@@ -295,6 +298,8 @@ fun UpdateScreen() {
             Spacer(Modifier.height(14.dp))
             Text(result, color = if (result.startsWith("Failed")) Color(0xFFFF8A80) else Ok)
         }
+        Spacer(Modifier.height(30.dp))
+        FlashCard(info)
         Spacer(Modifier.height(24.dp))
         Text("Pick the root of the card (phone SD slot or a USB card reader).\nFirmware restarts the menu; after a bitstream update switch the board off and on.",
             color = Dim, fontSize = 13.sp)
@@ -310,5 +315,113 @@ fun LogScreen() {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Text(log.ifEmpty { "The firmware log appears here." }, color = Color(0xFFB9C0D4), fontFamily = FontFamily.Monospace, fontSize = 11.sp,
             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(0xFF07080C)).verticalScroll(scroll).padding(12.dp))
+    }
+}
+
+// ---------------------------------------------------------------- install over USB (JTAG)
+@Composable
+fun FlashCard(info: Release.Info?) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var progress by remember { mutableStateOf<Pair<String, Float>?>(null) }
+    var result by remember { mutableStateOf("") }
+    fun go(load: suspend () -> List<FlashPart>) {
+        scope.launch {
+            result = ""
+            try {
+                val parts = load()
+                result = withContext(Dispatchers.IO) { Flasher.run(ctx, parts) { n, p -> progress = n to p } }
+            } catch (e: Exception) { result = "Failed: ${e.message}" }
+            progress = null
+        }
+    }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) go { withContext(Dispatchers.IO) { Flasher.parts(ctx, uris) } }
+    }
+    Text("Install over USB", color = Text, fontSize = 28.sp, fontWeight = FontWeight.Medium, letterSpacing = (-1).sp)
+    Text("Writes the bitstream and the firmware straight into the board's flash over JTAG, like openFPGALoader on a PC. Works on a board that does not boot.",
+        color = Dim, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Pill("Install the latest release", primary = true, enabled = info?.assets?.isNotEmpty() == true && progress == null) {
+            val i = info ?: return@Pill
+            go {
+                withContext(Dispatchers.IO) {
+                    i.assets.map { a ->
+                        val f = java.io.File(ctx.cacheDir, "release/${i.tag}/${a.name}")
+                        if (!f.isFile || f.length() != a.size) Release.download(a, f) { p -> progress = "Download ${a.name}" to p }
+                        val addr = if ("fpga" in a.name) Flasher.BITSTREAM else Flasher.FIRMWARE
+                        FlashPart(a.name, addr, f.readBytes())
+                    }.sortedBy { it.addr }
+                }
+            }
+        }
+        Pill("Choose files", enabled = progress == null) { pick.launch(arrayOf("*/*")) }
+    }
+    progress?.let { (n, p) ->
+        Spacer(Modifier.height(14.dp))
+        Text("$n  ${(p * 100).toInt()}%", color = Dim, fontSize = 13.sp)
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)), color = Color.White, trackColor = Panel2)
+    }
+    if (result.isNotEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        Text(result, color = if (result.startsWith("Failed")) Color(0xFFFF8A80) else Ok)
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("Files: gbc_top.fs or opgbc_fpga.bin (bitstream, 0x000000), fw.bin or opgbc_fw.bin (firmware, 0x100000), games.bin (0x200000). Keep the board plugged in until it restarts.",
+        color = Dim, fontSize = 12.sp)
+}
+
+// ---------------------------------------------------------------- IDE
+@Composable
+fun IdeScreen() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var note by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val web = remember { ideWebView(ctx) }
+    fun reload() { web.evaluateJavascript("window.ideReload && ideReload()", null) }
+    val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) { Sources.useTree(ctx, uri); reload(); note = "" }
+    }
+    val fwFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            withContext(Dispatchers.IO) {
+                val f = Sources.fwBin(ctx); f.parentFile?.mkdirs()
+                ctx.contentResolver.openInputStream(uri)!!.use { i -> f.outputStream().use { i.copyTo(it) } }
+            }
+            note = "fw.bin loaded: press Run in the Simulator"
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill("Get sources", enabled = !busy) {
+                busy = true
+                scope.launch {
+                    note = try { withContext(Dispatchers.IO) { Sources.download(ctx) { n -> note = "Downloading: $n" } }; reload(); "Sources from GitHub (main)" }
+                    catch (e: Exception) { "Failed: ${e.message}" }
+                    busy = false
+                }
+            }
+            Pill("Open folder") { folder.launch(null) }
+            Pill("fw.bin: release", enabled = !busy) {
+                busy = true
+                scope.launch {
+                    note = try {
+                        withContext(Dispatchers.IO) {
+                            val i = Release.latest()
+                            val a = i.assets.firstOrNull { it.name == "opgbc_fw.bin" } ?: throw Exception("the release has no firmware")
+                            Release.download(a, Sources.fwBin(ctx)) { p -> note = "Downloading fw.bin ${(p * 100).toInt()}%" }
+                            "fw.bin from ${i.tag}: press Run in the Simulator"
+                        }
+                    } catch (e: Exception) { "Failed: ${e.message}" }
+                    busy = false
+                }
+            }
+            Pill("fw.bin: file") { fwFile.launch(arrayOf("*/*")) }
+        }
+        if (note.isNotEmpty()) Text(note, color = Dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
+        AndroidView(factory = { web }, modifier = Modifier.fillMaxWidth().weight(1f))
     }
 }
