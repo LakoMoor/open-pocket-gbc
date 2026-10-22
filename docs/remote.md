@@ -30,7 +30,7 @@ Studio (Remote → live picture) and the Android app (Remote → live) show the 
 1. The app sends `V` at 115200.
 2. The firmware answers `#SCR 1985294`, then switches TX and the remote's RX to 1.985 Mbaud (33.75 MHz / 17).
 3. The app reopens the port at 2 Mbaud and sends `.`. The firmware stays quiet until a byte arrives at the new rate: data sent while the BL616 still runs at 115200 can hang the bridge until the cable is replugged. Button characters keep working at that rate.
-4. The app sends `.` every second. After 4 s without a byte, or after `v`, the firmware goes back to 115200.
+4. The app sends `.` every half second. After 2 s without a byte, or after `v` (checked between rows), the firmware goes back to 115200. Stop the stream before closing the port.
 
 **Packets:** `0x00`, type, u16 length (little endian), payload. Log text still arrives between packets.
 

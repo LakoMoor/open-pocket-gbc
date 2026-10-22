@@ -1416,8 +1416,8 @@ static void reset_game(void) {
 
 // ================================================================ screen stream over the USB-UART
 // The app sends 'V' (at 115200): the firmware answers "#SCR <baud>", switches the UART (TX and
-// the remote's RX) to ~2 Mbaud and streams the picture until 'v' or 4 s without a byte (the app
-// sends '.' every second). Packets: 0x00, type, u16 length, payload; log text goes between them.
+// the remote's RX) to ~2 Mbaud and streams the picture until 'v' or 2 s without a byte (the app
+// sends '.' every half second). Packets: 0x00, type, u16 length, payload; log text goes between them.
 //   'P' mode: gbc, gbc_raw, dmg palette (4 x RGB)       'O' OSD: flags (1 shown, 2 dim), 42x24 cells
 //   'L' LCD text: flags, 16x12 cells                   'G' a changed row: y, PackBits of 160 x u16
 //   'F' end of frame: u16 frame counter
@@ -1505,7 +1505,7 @@ static void scr_poll(void) {
         else if (scr_on == 2) scr_on = 1;
     }
     if (!scr_on) return;
-    if (ms_now() - scr_rx_ms > 4000) { scr_stop(); return; }
+    if (ms_now() - scr_rx_ms > 2000) { scr_stop(); return; }
     if (scr_on == 2) return;
     if (set.hdmi_off && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
     uint32_t st = stat_read();
@@ -1537,6 +1537,8 @@ static void scr_poll(void) {
         const volatile uint32_t *f = fb + y * 80;
         uint32_t h = scr_row_hash(f);
         if (h == scr_hash[y] && y != scr_fix) continue;
+        uint32_t r = REG_UART;                 // stop at once: the BL616 can hang on data nobody reads
+        if (r & 0x800) { scr_rx_ms = ms_now(); if ((uint8_t)r == 'v') { scr_stop(); return; } }
         scr_hash[y] = h;
         NR++;
         t2 = ms_now(); Tc += t2 - t1; t1 = t2;

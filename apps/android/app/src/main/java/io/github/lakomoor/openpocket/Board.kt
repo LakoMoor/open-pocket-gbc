@@ -109,7 +109,7 @@ object Board : SerialInputOutputManager.Listener {
         keepalive = Thread {
             // the firmware keeps only the last byte it received: until it answers, send nothing but 'V'
             while (_live.value && port != null) {
-                try { Thread.sleep(if (fast) 1000L else 300L) } catch (_: InterruptedException) { break }
+                try { Thread.sleep(if (fast) 500L else 300L) } catch (_: InterruptedException) { break }
                 write(if (fast) "." else "V")
             }
         }.also { it.isDaemon = true; it.start() }
