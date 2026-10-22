@@ -8,7 +8,9 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable"
+    "dist": "electron-builder --win portable",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "build": {
     "appId": "io.github.lakomoor.openpocket.studio",
@@ -16,12 +18,36 @@
       "main.js",
       "preload.js",
       "renderer/**",
+      "sim/**",
       "assets/**"
     ],
     "win": {
       "target": "portable",
       "artifactName": "OpenPocketStudio-${version}.exe",
       "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "OpenPocketStudio-${version}-mac-${arch}.${ext}",
+      "identity": null
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "artifactName": "OpenPocketStudio-${version}-linux-${arch}.${ext}",
+      "maintainer": "LakoMoor <LakoMoor@users.noreply.github.com>"
+    },
+    "deb": {
+      "depends": [
+        "libudev1"
+      ]
     }
   },
   "dependencies": {
@@ -31,5 +57,6 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
-  }
+  },
+  "homepage": "https://github.com/LakoMoor/open-pocket-gbc"
 }

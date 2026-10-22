@@ -21,10 +21,13 @@ module pll_hdmi (input clock_in, output clock_out, output locked);
     assign locked = 1'b1;
 endmodule
 
-// clk_p for video: 27 MHz, generated here instead of dividing the serial clock
+// clk_p for video: 27 MHz, generated here instead of dividing the serial clock.
+// +no_hdmi stops it: the HDMI pipeline then costs nothing and the LCD runs ~2x faster.
 module CLKDIV #(parameter DIV_MODE = "2", parameter GSREN = "false") (output reg CLKOUT, input HCLKIN, input RESETN, input CALIB);
-    initial CLKOUT = 0;
-    always #18519 CLKOUT = ~CLKOUT;
+    initial begin
+        CLKOUT = 0;
+        if (!$test$plusargs("no_hdmi")) forever #18519 CLKOUT = ~CLKOUT;
+    end
 endmodule
 
 module OSER10 #(parameter GSREN = "false", parameter LSREN = "true") (output Q, input D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, input PCLK, FCLK, RESET);

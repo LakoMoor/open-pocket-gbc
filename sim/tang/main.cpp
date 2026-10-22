@@ -2,10 +2,13 @@
 // Verilator, with models of what sits on the board: the SPI flash (firmware, games,
 // settings), an SD card image, the ST7735 LCD, the buttons and the USB-UART.
 //
-//   tang_sim [--flash flash.bin] [--sd sd.img] [--no-hdmi] [--frames N]
+//   tang_sim [--flash flash.bin] [--sd sd.img] [--no-hdmi] [--ms N] [--stdout-text]
 //
 // stdout carries binary messages for Open Pocket Studio: one type byte, a u32 length, data:
-//   'L' UART log text   'H' HDMI frame 720x480 RGB   'C' LCD frame 128x128 RGB565   'T' sim ms (u32)
+//   'L' UART log text   'C' LCD frame 128x128 RGB565   'T' sim ms (u32)
+//   'B' HDMI band: u16 first row, u16 rows, rows x 720 RGB. A band goes out as soon as its
+//       scanlines are drawn and only when it changed, so the picture builds up line by line
+//       and a still menu costs nothing.
 // stdin takes lines: "K <hex>" buttons (bit 0..7 up down left right a b select start, 8 S1, 9 S2),
 //   "R <char>" a byte for the remote (USB-UART rx), "Q" quit. Without Studio: --stdout-text
 //   prints the log only.
@@ -247,7 +250,9 @@ int main(int argc, char **argv) {
     if (sd_path) load(sd_path, sdimg, 0);
 
     auto ctx = new VerilatedContext;
-    ctx->commandArgs(argc, argv);
+    std::vector<const char *> vargs(argv, argv + argc);
+    if (!hdmi) vargs.push_back("+no_hdmi");          // stops the pixel clock in sim_prims.v
+    ctx->commandArgs((int)vargs.size(), vargs.data());
     auto top = new Vsim_top{ctx};
     SpiSlave<FlashDev> fl;
     SpiSlave<SdDev> sd;
@@ -256,7 +261,8 @@ int main(int argc, char **argv) {
     top->sd_dat0 = 1; top->flash_miso = 1; top->cart_miso = 1;
     std::thread(reader).detach();
 
-    std::vector<uint8_t> frame(720 * 480 * 3);
+    const int BAND = 24;
+    std::vector<uint8_t> frame(720 * 480 * 3), sent(720 * 480 * 3, 1), band(4 + 720 * BAND * 3);
     int last_vclk = 0, last_sclk = 0, last_cy = 0;
     const int UDIV = 33750000 / 115200;
     int u_cnt = -1, u_bit = 0, u_byte = 0;          // UART tx decoder
@@ -328,7 +334,16 @@ int main(int argc, char **argv) {
                 uint32_t c = top->vid_rgb;
                 p[0] = c >> 16; p[1] = c >> 8; p[2] = c;
             }
-            if (cy == 480 && last_cy == 479) msg('H', frame.data(), (uint32_t)frame.size());
+            if (cy != last_cy && last_cy < 480 && (last_cy + 1) % BAND == 0) {
+                int y0 = last_cy + 1 - BAND;
+                size_t off = (size_t)y0 * 720 * 3, len = (size_t)720 * BAND * 3;
+                if (memcmp(&frame[off], &sent[off], len)) {
+                    memcpy(&sent[off], &frame[off], len);
+                    band[0] = y0 & 0xFF; band[1] = y0 >> 8; band[2] = BAND; band[3] = 0;
+                    memcpy(&band[4], &frame[off], len);
+                    msg('B', band.data(), (uint32_t)band.size());
+                }
+            }
             last_cy = cy;
         }
         last_vclk = top->vid_clk;

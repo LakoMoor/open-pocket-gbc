@@ -10,7 +10,11 @@ const { SerialPort } = require('serialport');
 
 const REPO = 'LakoMoor/open-pocket-gbc';
 const ROOT = path.resolve(__dirname, '..', '..');          // the repository, when run from a checkout
-const TOOLS = process.env.TOOLS || 'E:/tools/oss-cad-suite';
+const TOOLS = process.env.TOOLS || (process.platform === 'win32' ? 'E:/tools/oss-cad-suite' : '/opt/oss-cad-suite');
+const EXE = process.platform === 'win32' ? '.exe' : '';
+// bash runs the build scripts: Git Bash on Windows, the system one elsewhere
+const BASH = process.platform !== 'win32' ? 'bash'
+  : ['C:/Program Files/Git/bin/bash.exe', 'C:/Program Files (x86)/Git/bin/bash.exe'].find(fs.existsSync) || 'bash.exe';
 const BUILD = {
   bitstream: path.join(ROOT, 'build', 'gbc_top', 'gbc_top.fs'),
   firmware: path.join(ROOT, 'fw', 'build', 'fw.bin'),
@@ -24,7 +28,7 @@ const log = text => send('log', text);
 
 // ---------------------------------------------------------------- openFPGALoader
 function loaderPath() {
-  const exe = process.platform === 'win32' ? 'openFPGALoader.exe' : 'openFPGALoader';
+  const exe = 'openFPGALoader' + EXE;
   const local = path.join(TOOLS, 'bin', exe);
   return fs.existsSync(local) ? local : exe;            // otherwise from PATH
 }
@@ -322,8 +326,7 @@ ipcMain.handle('ide-read', (_, p) => insideSources(p) ? fs.readFileSync(p, 'utf8
 ipcMain.handle('ide-write', (_, p, text) => { if (!insideSources(p)) return false; fs.writeFileSync(p, text.replace(/\r\n/g, '\n')); return true; });
 ipcMain.handle('ide-build', () => new Promise(resolve => {
   if (buildProc) return resolve(-1);
-  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
-  buildProc = spawn(bash, [path.join(ROOT, 'fw', 'build.sh')], { cwd: path.join(ROOT, 'fw'), windowsHide: true });
+  buildProc = spawn(BASH, [path.join(ROOT, 'fw', 'build.sh')], { cwd: path.join(ROOT, 'fw'), windowsHide: true });
   const fwd = d => send('build-log', d.toString());
   buildProc.stdout.on('data', fwd);
   buildProc.stderr.on('data', fwd);
@@ -339,12 +342,11 @@ ipcMain.handle('sim-save', (_, flash, sd) => {
 });
 
 // ---- the Tang Nano 20K RTL simulator (sim/tang, Verilator): frames and the log over stdout
-const RTL_EXE = path.join(ROOT, 'build', 'tang_sim', 'tang_sim.exe');
+const RTL_EXE = path.join(ROOT, 'build', 'tang_sim', 'tang_sim' + EXE);
 let rtlProc = null;
 ipcMain.handle('rtl-available', () => fs.existsSync(RTL_EXE));
 ipcMain.handle('rtl-build', () => new Promise(resolve => {
-  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
-  const p = spawn(bash, [path.join(ROOT, 'sim', 'tang', 'build.sh')], { cwd: ROOT, windowsHide: true });
+  const p = spawn(BASH, [path.join(ROOT, 'sim', 'tang', 'build.sh')], { cwd: ROOT, windowsHide: true });
   const fwd = d => send('build-log', d.toString());
   p.stdout.on('data', fwd); p.stderr.on('data', fwd);
   p.on('error', e => { send('build-log', e.message + '\n'); resolve(-1); });
@@ -368,7 +370,7 @@ ipcMain.handle('rtl-start', (_, opts) => {
       if (buf.length < 5 + n) break;
       const type = String.fromCharCode(buf[0]), data = buf.subarray(5, 5 + n);
       if (type === 'L') send('rtl-log', data.toString('latin1'));
-      else if (type === 'H') send('rtl-hdmi', new Uint8Array(data));
+      else if (type === 'B') send('rtl-band', new Uint8Array(data));   // u16 y0, u16 rows, rows x 720 RGB
       else if (type === 'C') send('rtl-lcd', new Uint8Array(data));
       else if (type === 'T') send('rtl-time', data.readUInt32LE(0));
       buf = buf.subarray(5 + n);

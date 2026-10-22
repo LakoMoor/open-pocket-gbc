@@ -1,0 +1,53 @@
+# Open Pocket Studio for Windows, macOS and Linux. Runs by hand (Actions -> Studio -> Run) or on
+# a v* tag; on a tag the installers are attached to that GitHub release.
+name: Studio
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            cmd: npx electron-builder --win portable --publish never
+          - os: macos-latest
+            cmd: npx electron-builder --mac --x64 --arm64 --publish never
+          - os: ubuntu-latest
+            cmd: npx electron-builder --linux --publish never
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: apps/studio
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/studio/package-lock.json
+      - run: npm ci
+      - run: ${{ matrix.cmd }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-${{ runner.os }}
+          path: |
+            apps/studio/dist/*.exe
+            apps/studio/dist/*.dmg
+            apps/studio/dist/*.zip
+            apps/studio/dist/*.AppImage
+            apps/studio/dist/*.deb
+          if-no-files-found: error
+      - if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(ls dist/*.exe dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb 2>/dev/null || true)
+          gh release upload "$GITHUB_REF_NAME" $files --clobber

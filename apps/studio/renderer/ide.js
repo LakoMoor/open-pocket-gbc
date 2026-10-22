@@ -155,22 +155,28 @@
   const hctx = hdmiFull.getContext('2d'), himgFull = hctx.createImageData(720, 480);
   async function startRtl(freshFw) {
     slog.textContent = '';
-    const r = await S.rtlStart({ freshFw });
+    const r = await S.rtlStart({ freshFw, noHdmi: !$('#simhdmion').checked });
     if (!r.ok) { $('#simstate').textContent = r.msg; return; }
     rtlRunning = true;
+    hctx.clearRect(0, 0, 720, 480);
+    hdmi.clearRect(0, 0, 672, 480);
     $('#simstate').textContent = 'Tang Nano 20K: starting (the boot takes about a minute of real time)';
     $('#simhdmi').focus();
   }
   S.on('rtl-log', t => { slog.textContent += t; slog.scrollTop = slog.scrollHeight; });
   S.on('rtl-time', ms => { if (rtlRunning) $('#simstate').textContent = `Tang Nano 20K · ${(ms / 1000).toFixed(2)} s simulated`; });
   S.on('rtl-exit', code => { if (rtlRunning) { rtlRunning = false; $('#simstate').textContent = 'simulator exited (' + code + ')'; } });
-  S.on('rtl-hdmi', rgb => {
-    const d = himgFull.data;
-    for (let i = 0, j = 0; i < 720 * 480; i++, j += 3) { d[i * 4] = rgb[j]; d[i * 4 + 1] = rgb[j + 1]; d[i * 4 + 2] = rgb[j + 2]; d[i * 4 + 3] = 255; }
-    hctx.putImageData(himgFull, 0, 0);
-    hdmi.imageSmoothingEnabled = false;
-    hdmi.drawImage(hdmiFull, 0, 0, 672, 480);
+  // the picture arrives in bands of scanlines as they are drawn, only the ones that changed
+  let hdmiDirty = false;
+  S.on('rtl-band', b => {
+    const y0 = b[0] | (b[1] << 8), rows = b[2] | (b[3] << 8), d = himgFull.data;
+    for (let i = y0 * 720, j = 4, e = (y0 + rows) * 720; i < e; i++, j += 3) {
+      d[i * 4] = b[j]; d[i * 4 + 1] = b[j + 1]; d[i * 4 + 2] = b[j + 2]; d[i * 4 + 3] = 255;
+    }
+    hctx.putImageData(himgFull, 0, 0, 0, y0, 720, rows);
+    if (!hdmiDirty) { hdmiDirty = true; requestAnimationFrame(() => { hdmiDirty = false; hdmi.imageSmoothingEnabled = false; hdmi.drawImage(hdmiFull, 0, 0, 672, 480); }); }
   });
+  $('#simhdmion').onchange = () => { if (rtlRunning) startRtl(false); };
   S.on('rtl-lcd', px => {
     const d = limg.data, v16 = new Uint16Array(px.buffer, px.byteOffset, 128 * 128);
     for (let i = 0; i < 128 * 128; i++) {
