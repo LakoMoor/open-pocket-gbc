@@ -243,7 +243,13 @@ wire [1:0] disp_mode = cfg[1:0];
 wire [2:0] dmg_pal   = cfg[4:2];
 wire       gbc_raw   = cfg[5];
 wire       lcd_crop  = cfg[6];
+// the Debug overlay (status squares and lines on HDMI and the LCD) is for development:
+// build with DEFS="-D DEBUG_OVERLAY" to keep it; without it synthesis drops the logic
+`ifdef DEBUG_OVERLAY
 wire       dbg_on    = cfg[7];
+`else
+wire       dbg_on    = 1'b0;
+`endif
 wire [3:0] lcd_bri   = cfg[11:8];
 wire [2:0] volume    = cfg[14:12];
 wire       swap_ab   = cfg[15];

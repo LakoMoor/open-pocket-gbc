@@ -518,7 +518,7 @@ huc1 map_huc1 (
 );
 
 huc3 map_huc3 (
-	.enable            ( huc3 ),
+	.enable            ( `MAPPER_EN(huc3) ),
 
 	.clk_sys           ( clk_sys ),
 	.ce_cpu            ( ce ),
@@ -734,7 +734,7 @@ megaduck map_megaduck (
 
 // Mani 4-in-1 DMG 601 & Wisdom Tree 32KB bank mappers
 misc_mapper map_misc (
-	.enable           ( ~reset & (wisdom_tree | mani161) ),
+	.enable           ( `MAPPER_EN(~reset & (wisdom_tree | mani161)) ),
 
 	.clk_sys          ( clk_sys ),
 	.ce_cpu           ( ce ),
