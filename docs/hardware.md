@@ -89,6 +89,61 @@ The clock is 8.4 MHz, so short jumper wires are fine.
 
 The output is the mono mix after the Volume setting, with the DC level removed and Speaker Boost applied (x4 by default), muted in the menu, and held low when Speaker is off.
 
+### Link port (cable to an original Game Boy / GBC)
+
+The link port connects to a real Game Boy, Game Boy Color, Game Boy Pocket or GBA (in GB/GBC mode) with an ordinary link cable, and to a Game Boy Printer. Turn it on with **System → Link Port**.
+
+| Signal | FPGA pin | Direction |
+|---|---|---|
+| SC (clock) | 41 | both: we drive it when the game uses the internal clock |
+| SI (data in) | 42 | in |
+| SO (data out) | 56 | out |
+| GND | GND | |
+
+**Level shifter.** Use one on all three lines: the Game Boy's link port is 5 V and the FPGA pins are 3.3 V only. A 4-channel BSS138 module or a TXS0104 works:
+- LV → Tang **3V3**, HV → Tang **5V**, GND to both;
+- LV1/2/3 ↔ pins 41/42/56, HV1/2/3 ↔ SC/SI/SO of the cable.
+
+**The cable crosses SI and SO.** The easiest way is to build a socket that copies the console's own port: then an unmodified cable plugs in, and the cable does the crossing.
+
+| Socket pin (looking into the console port) | Signal | Goes to |
+|---|---|---|
+| 1 | VCC | not connected |
+| 2 | SO | HV of pin 56 |
+| 3 | SI | HV of pin 42 |
+| 4 | SD | not connected |
+| 5 | SC | HV of pin 41 |
+| 6 | GND | GND |
+
+**With a cut cable**, identify the wires with a multimeter against the plug that stays on the console's side:
+- that plug's pin 2 (the console's SO) → our SI (42);
+- its pin 3 (the console's SI) → our SO (56);
+- its pin 5 → SC (41), its pin 6 → GND.
+
+Most cables leave pins 1 and 4 unwired.
+
+**Speed.** The core's serial port runs at the real rates: 8 kHz with the external clock, and up to 512 kHz with the GBC double-speed clock. Keep the wires under ~30 cm.
+
+**What to play.** Trading and battles (Pokémon), Tetris and F-1 Race two-player and Printer games all work. Both consoles must run compatible games, as with two real Game Boys.
+
+### Carrier board extras (Menu button, USB power, battery gauge)
+
+Optional; a bare Tang Nano runs without them.
+
+| Signal | FPGA pin | Wiring |
+|---|---|---|
+| Menu button | 54 | to GND, internal pull-up; same as S1 |
+| USB power present | 86 | VBUS through a 10 kΩ / 20 kΩ divider (5 V → 3.3 V), internal pull-down |
+| I²C SCL to IP5306-I2C | 15 | 4.7 kΩ pull-up to 3V3 |
+| I²C SDA to IP5306-I2C | 16 | 4.7 kΩ pull-up to 3V3 |
+
+The status icons in the menu header come from these pins:
+- a battery with its level (from IP5306 register 0x78);
+- a plug while USB power is present or the battery is charging;
+- a PC while Studio or a script has sent remote commands in the last 15 s.
+
+Pins 15 and 16 are also the board's LED0/LED1, which blink faintly while the gauge is read (every 5 s). Without the pull-ups the bus does not idle high, and the menu shows no battery.
+
 ### DualShock 2
 
 Use the Sipeed adapter on pins 17–20, the same as NESTang. These pins are shared with LEDs 2–5. The controller is polled continuously by `rtl/io/dualshock_controller.v`.

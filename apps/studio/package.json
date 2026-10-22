@@ -14,6 +14,7 @@
   },
   "build": {
     "appId": "io.github.lakomoor.openpocket.studio",
+    "npmRebuild": false,
     "files": [
       "main.js",
       "preload.js",

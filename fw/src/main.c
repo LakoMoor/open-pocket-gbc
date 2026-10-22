@@ -1468,6 +1468,10 @@ static uint8_t i2c_rd(int ack) {
     return b;
 }
 static int ip5306_read(uint8_t reg) {     // -1 when nothing answers
+    // a real bus idles high through its pull-ups; the bare board's LED pins may float low and
+    // would read as an ACK
+    i2c_set(1, 1);
+    if ((REG_GPIO & 3) != 3) return -1;
     i2c_start();
     if (!i2c_wr(0x75 << 1)) { i2c_stop(); return -1; }
     i2c_wr(reg);
