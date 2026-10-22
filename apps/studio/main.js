@@ -203,8 +203,9 @@ function screen(on) {
   scrOn = on;
   if (on) {
     port.write('V');
+    // the firmware keeps only the last byte: until it answers send 'V' only, then '.' to keep it alive
     let n = 0;
-    scrTimer = setInterval(() => { if (port && port.isOpen) port.write(!scrFast && ++n % 2 === 0 ? 'V' : '.'); }, 1000);
+    scrTimer = setInterval(() => { if (port && port.isOpen && (!scrFast || ++n % 3 === 0)) port.write(scrFast ? '.' : 'V'); }, 330);
   } else {
     clearInterval(scrTimer); scrTimer = null;
     if (port && port.isOpen) { port.write('v'); setTimeout(() => { if (port && port.isOpen) port.update({ baudRate: 115200 }); scrFast = false; }, 60); }

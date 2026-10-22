@@ -374,7 +374,7 @@ fun FlashCard(info: Release.Info?) {
                 withContext(Dispatchers.IO) {
                     i.assets.map { a ->
                         val f = java.io.File(ctx.cacheDir, "release/${i.tag}/${a.name}")
-                        if (!f.isFile || f.length() != a.size) Release.download(a, f) { p -> progress = "Download ${a.name}" to p }
+                        Release.download(a, f) { p -> progress = "Download ${a.name}" to p }   // always fresh: a release can be updated
                         val addr = if ("fpga" in a.name) Flasher.BITSTREAM else Flasher.FIRMWARE
                         FlashPart(a.name, addr, f.readBytes())
                     }.sortedBy { it.addr }

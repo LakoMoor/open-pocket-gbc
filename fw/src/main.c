@@ -1543,6 +1543,7 @@ static uint32_t poll_keys(uint32_t timeout) {
         if (dp) { int32_t d = (int32_t)(rep_t - ms_now()); t = d > 0 ? (uint32_t)d : 1; if (t > timeout) t = timeout; }
         scr_poll();
         if (scr_on && t > 8) t = 8;
+        else if (t > 250) t = 250;             // a stream request ('V') is only seen when polled
         REG_WAIT = t;
         (void)REG_WAIT;
         cur = REG_IN & 0xFFFF;
