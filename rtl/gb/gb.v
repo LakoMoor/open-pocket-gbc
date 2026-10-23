@@ -439,6 +439,7 @@ GBse cpu (
 // --------------------------- Cheat Engine ---------------------------
 // --------------------------------------------------------------------
 
+`ifdef GG_ENGINE
 CODES codes (
 	.clk        (clk_sys),
 	.reset      (gg_reset),
@@ -450,6 +451,12 @@ CODES codes (
 	.genie_ovr  (genie_ovr),
 	.genie_data (genie_data)
 );
+`else
+// Game Genie codes patch the ROM image in SDRAM (firmware), so the core's cheat engine is left out
+assign genie_ovr = 1'b0;
+assign genie_data = 8'd0;
+assign gg_available = 1'b0;
+`endif
 
 // --------------------------------------------------------------------
 // --------------------- GBC/DMG mode KEY0 (GBC) ----------------------

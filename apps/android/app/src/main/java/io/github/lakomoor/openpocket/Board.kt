@@ -164,6 +164,15 @@ object Board : SerialInputOutputManager.Listener {
     }
 
     @Volatile private var lastRx = 0L
+    // 'M': fill the words the mask marks as repeats; at a group end wait for the next mask
+    private fun mRepeats() {
+        while (pState == 12 && (rC and 1) != 0) {
+            rW[rN] = if (rN > 0) rW[rN - 1] else 0; rN++; rC = rC shr 1
+            if (rN % 8 == 0) pState = 11
+        }
+        if (pState == 11 && rN >= 80) { rowToG(); pState = 0 }
+    }
+
     override fun onNewData(data: ByteArray) {
         lastRx = System.currentTimeMillis()
         if (!fast) { onText(data); return }
@@ -171,7 +180,7 @@ object Board : SerialInputOutputManager.Listener {
             val v = b.toInt() and 255
             when (pState) {
                 0 -> if (v == 0) pState = 1 else text.write(v)
-                1 -> { pType = v.toChar(); pState = if (pType == 'R') 6 else 2 }
+                1 -> { pType = v.toChar(); pState = if (pType == 'R') 6 else if (pType == 'M') 10 else 2 }
                 2 -> { pLen = v; pState = 3 }
                 3 -> { pLen = pLen or (v shl 8); pPos = 0; pState = if (pLen == 0) { LiveScreen.packet(pType, pBuf, 0); 0 } else if (pLen > pBuf.size) 5 else 4 }
                 4 -> { pBuf[pPos++] = b; if (pPos == pLen) { LiveScreen.packet(pType, pBuf, pLen); pState = 0 } }
@@ -187,6 +196,18 @@ object Board : SerialInputOutputManager.Listener {
                         if (rC < 128) { if (rN < 80) rW[rN++] = rX; rX = 0; if (rC-- == 0) pState = 7 }
                         else { var r = rC - 126; while (r-- > 0 && rN < 80) rW[rN++] = rX; pState = 7 }
                         if (pState == 7 && rN >= 80) { rowToG(); pState = 0 }
+                    }
+                }
+                // 'M' (hardware engine): y, then 10 groups of 8 words: a mask byte (bit n: word n
+                // repeats the word before it), then the other words, 4 bytes each
+                10 -> { rY = v; rN = 0; pState = 11 }
+                11 -> { rC = v; rK = 0; rX = 0; pState = 12; mRepeats() }
+                12 -> {
+                    rX = rX or (v shl (8 * rK++))
+                    if (rK == 4) {
+                        rW[rN++] = rX; rX = 0; rK = 0; rC = rC shr 1
+                        if (rN % 8 == 0) pState = 11
+                        mRepeats()
                     }
                 }
             }

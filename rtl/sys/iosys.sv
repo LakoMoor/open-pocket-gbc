@@ -130,7 +130,7 @@ reg         se_own;
 wire        se_req, se_we, se_busy, se_tx_valid;
 wire [20:0] se_addr;
 wire [31:0] se_wdata;
-wire  [7:0] se_rows, se_tx_byte;
+wire  [7:0] se_tx_byte;
 assign rv_req   = se_own ? se_req   : mem_valid & is_ram & ~ram_wait_rd & ~ram_done;
 assign rv_we    = se_own ? se_we    : is_wr;
 assign rv_addr  = se_own ? se_addr  : mem_addr[22:2];
@@ -155,15 +155,15 @@ always @(posedge clk) begin
 end
 
 // ------------------------------------------------------------ screen stream engine
-// write 0x6C: {fix row, framebuffer word address} starts it; read 0x6C waits until it is done
-// and returns the rows sent; write 0x70: word address of its hash table
+// write 0x6C: {fix row, framebuffer word address} starts it; read 0x6C waits until it is done;
+// write 0x70: word address of its hash table (256-word aligned)
 reg  [20:0] se_base, se_htab;
 reg   [7:0] se_fix;
 reg         se_start;
 wire        se_tx_take = se_own & se_tx_valid & (u_n == 0);
 scr_engine u_se (
     .clk(clk), .reset(reset), .start(se_start), .base(se_base), .htab(se_htab), .fix(se_fix),
-    .busy(se_busy), .rows(se_rows),
+    .busy(se_busy),
     .req(se_req), .we(se_we), .addr(se_addr), .wdata(se_wdata),
     .ack(rv_ack & se_own), .rdata(rv_rdata), .rvalid(rv_rvalid & se_own),
     .tx_valid(se_tx_valid), .tx_byte(se_tx_byte), .tx_take(se_tx_take)
@@ -244,7 +244,7 @@ always @* begin
             6'h03: mem_rdata = {frames, 10'd0, remote, stat_buf, dirty, stat_2x, stat_gbc};
             6'h19: mem_rdata = {29'd0, gpio_in};
             6'h1A: mem_rdata = {20'd0, rx_new, 3'd0, rx_byte};
-            6'h1B: begin mem_ready = ~se_own; mem_rdata = {24'd0, se_rows}; end
+            6'h1B: mem_ready = ~se_own;
             6'h0C: mem_ready = ~u_busy;
             6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout; mem_rdata = {31'd0, ev}; end
             6'h0E: mem_rdata = ctrl;

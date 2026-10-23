@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.4"
+#define FW_VERSION      "1.5"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -1433,6 +1433,8 @@ static void reset_game(void) {
 //   'F' end of frame: u16 frame counter
 //   'R' (after 'W' instead of 'V'): 0x00 'R' y, then PackBits over the row's 80 words (pixel
 //       pairs) without a length: c < 128: c + 1 literal words, else c - 126 copies of one word
+//   'M' (after 'W', bitstream 1.5: rtl/sys/scr_engine.sv encodes the rows): 0x00 'M' y, then 10
+//       groups of 8 words: a mask byte (bit n: word n repeats the word before it), the other words
 #define UDIV_SLOW (33750000 / 115200)
 #define UDIV_FAST 17                   // 1.985 Mbaud
 static int      scr_on, scr_buf = -1, scr_mode = -1, scr_osd_flags = -1;

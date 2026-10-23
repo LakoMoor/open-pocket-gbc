@@ -291,12 +291,18 @@ function screen(on) {
     }
   }
 }
+// a row of 80 words as a 'G' packet: two literal runs (128 + 32 pixels)
+function wordsToG(y, w) {
+  const g = new Uint8Array(1 + 2 + 320); g[0] = y; g[1] = 127; g[258] = 31;
+  for (let i = 0; i < 80; i++) { const o = (i < 64 ? 2 : 3) + i * 4; g[o] = w[i] & 255; g[o + 1] = (w[i] >> 8) & 255; g[o + 2] = (w[i] >> 16) & 255; g[o + 3] = w[i] >>> 24; }
+  return g;
+}
 function onBinary(d) {
   let text = '';
   for (const v of d) {
     switch (pk.st) {
       case 0: if (v === 0) pk.st = 1; else text += String.fromCharCode(v); break;
-      case 1: pk.type = v; pk.st = v === 82 ? 10 : 2; break;
+      case 1: pk.type = v; pk.st = v === 82 ? 10 : v === 77 ? 20 : 2; break;
       case 2: pk.len = v; pk.st = 3; break;
       case 3: pk.len |= v << 8; pk.pos = 0; pk.buf = new Uint8Array(pk.len); pk.st = pk.len ? 4 : 0; if (!pk.len) scrPk.push([pk.type, pk.buf]); break;
       case 4: pk.buf[pk.pos++] = v; if (pk.pos === pk.len) { scrPk.push([pk.type, pk.buf]); pk.st = 0; if (pk.type === 70) { send('scr', scrPk); scrPk = []; } } break;
@@ -310,11 +316,23 @@ function onBinary(d) {
         pk.k = 0;
         if (pk.c < 128) { if (pk.n < 80) pk.w[pk.n++] = pk.x >>> 0; pk.x = 0; if (pk.c-- === 0) pk.st = 11; }
         else { for (let r = pk.c - 126; r > 0 && pk.n < 80; r--) pk.w[pk.n++] = pk.x >>> 0; pk.st = 11; }
-        if (pk.st === 11 && pk.n >= 80) {
-          const g = new Uint8Array(1 + 2 + 320); g[0] = pk.y; g[1] = 127; g[258] = 31;
-          for (let i = 0; i < 80; i++) { const o = (i < 64 ? 2 : 3) + i * 4; g[o] = pk.w[i] & 255; g[o + 1] = (pk.w[i] >> 8) & 255; g[o + 2] = (pk.w[i] >> 16) & 255; g[o + 3] = pk.w[i] >>> 24; }
-          scrPk.push([71, g]); pk.st = 0;
-        }
+        if (pk.st === 11 && pk.n >= 80) { scrPk.push([71, wordsToG(pk.y, pk.w)]); pk.st = 0; }
+        break;
+      // 'M' (hardware engine): y, then 10 groups of 8 words: a mask byte (bit n: word n repeats the
+      // word before it), then the other words, 4 bytes each
+      case 20: pk.y = v; pk.w = new Uint32Array(80); pk.n = 0; pk.st = 21; break;
+      case 21:
+        pk.m = v; pk.k = 0; pk.x = 0; pk.st = 22;
+        while (pk.st === 22 && (pk.m & 1)) { pk.w[pk.n] = pk.n ? pk.w[pk.n - 1] : 0; pk.n++; pk.m >>= 1; if (pk.n % 8 === 0) pk.st = pk.n >= 80 ? 0 : 21; }
+        if (pk.st === 0) scrPk.push([71, wordsToG(pk.y, pk.w)]);
+        break;
+      case 22:
+        pk.x |= v << (8 * pk.k++);
+        if (pk.k < 4) break;
+        pk.w[pk.n++] = pk.x >>> 0; pk.x = 0; pk.k = 0; pk.m >>= 1;
+        if (pk.n % 8 === 0) pk.st = 21;
+        while (pk.st === 22 && (pk.m & 1)) { pk.w[pk.n] = pk.w[pk.n - 1]; pk.n++; pk.m >>= 1; if (pk.n % 8 === 0) pk.st = 21; }
+        if (pk.st === 21 && pk.n >= 80) { scrPk.push([71, wordsToG(pk.y, pk.w)]); pk.st = 0; }
         break;
     }
   }
