@@ -229,7 +229,8 @@ $('#auto').onchange = async e => {
   const ok = await S.screen(e.target.checked);
   if (!ok) { e.target.checked = false; log('(no board on USB)\n'); return; }
   $('#livefps').textContent = e.target.checked ? 'waiting for the picture (bitstream 1.3, firmware 1.3 or newer)…' : '';
-  $('#liveshot').hidden = !e.target.checked;
+  $('#liveshot').hidden = $('#liverec').hidden = !e.target.checked;
+  if (!e.target.checked && rec) rec.stop();
 };
 // the game 3x and the HDMI picture with the menu, as PNG files
 $('#liveshot').onclick = async () => {
@@ -241,6 +242,21 @@ $('#liveshot').onclick = async () => {
   const b64 = cv => cv.toDataURL('image/png').split(',')[1];
   const f = await S.savePngs([['', b64(c)], ['_hdmi', b64($('#osd'))]]);
   if (f) log(`screenshot: ${f}\n`);
+};
+// recording: the HDMI view (game and menu) as WebM, 30 fps
+let rec = null;
+$('#liverec').onclick = () => {
+  if (rec) { rec.stop(); return; }
+  const chunks = [];
+  rec = new MediaRecorder($('#osd').captureStream(30), { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 4e6 });
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    rec = null; $('#liverec').textContent = 'Record'; $('#liverec').classList.remove('on');
+    const f = await S.saveVideo(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer());
+    if (f) log(`video: ${f}\n`);
+  };
+  rec.start(1000);
+  $('#liverec').textContent = '■ Stop'; $('#liverec').classList.add('on');
 };
 
 // ---------------------------------------------------------------- remote: buttons

@@ -123,20 +123,26 @@ wire is_wr   = mem_wstrb != 0;
 wire fire    = mem_valid & mem_ready;
 
 // ------------------------------------------------------------ SDRAM
+// While the screen stream engine runs (se_own) it has the port; the CPU waits on its next access.
 reg ram_wait_rd, ram_done;
 reg [31:0] ram_q;
-assign rv_req   = mem_valid & is_ram & ~ram_wait_rd & ~ram_done;
-assign rv_we    = is_wr;
-assign rv_addr  = mem_addr[22:2];
-assign rv_wdata = mem_wdata;
-assign rv_be    = is_wr ? mem_wstrb : 4'hF;
+reg         se_own;
+wire        se_req, se_we, se_busy, se_tx_valid;
+wire [20:0] se_addr;
+wire [31:0] se_wdata;
+wire  [7:0] se_rows, se_tx_byte;
+assign rv_req   = se_own ? se_req   : mem_valid & is_ram & ~ram_wait_rd & ~ram_done;
+assign rv_we    = se_own ? se_we    : is_wr;
+assign rv_addr  = se_own ? se_addr  : mem_addr[22:2];
+assign rv_wdata = se_own ? se_wdata : mem_wdata;
+assign rv_be    = se_own ? 4'hF     : is_wr ? mem_wstrb : 4'hF;
 always @(posedge clk) begin
     if (!rv_resetn) begin
         ram_wait_rd <= 0;
         ram_done    <= 0;
     end else begin
         if (fire) ram_done <= 0;
-        if (rv_ack) begin
+        if (rv_ack && !se_own) begin
             if (rv_we) ram_done    <= 1;
             else       ram_wait_rd <= 1;
         end
@@ -147,6 +153,21 @@ always @(posedge clk) begin
         end
     end
 end
+
+// ------------------------------------------------------------ screen stream engine
+// write 0x6C: {fix row, framebuffer word address} starts it; read 0x6C waits until it is done
+// and returns the rows sent; write 0x70: word address of its hash table
+reg  [20:0] se_base, se_htab;
+reg   [7:0] se_fix;
+reg         se_start;
+wire        se_tx_take = se_own & se_tx_valid & (u_n == 0);
+scr_engine u_se (
+    .clk(clk), .reset(reset), .start(se_start), .base(se_base), .htab(se_htab), .fix(se_fix),
+    .busy(se_busy), .rows(se_rows),
+    .req(se_req), .we(se_we), .addr(se_addr), .wdata(se_wdata),
+    .ack(rv_ack & se_own), .rdata(rv_rdata), .rvalid(rv_rvalid & se_own),
+    .tx_valid(se_tx_valid), .tx_byte(se_tx_byte), .tx_take(se_tx_take)
+);
 
 // ------------------------------------------------------------ boot ROM
 `include "bootrom.vh"
@@ -217,12 +238,13 @@ always @* begin
     end else if (is_io) begin
         mem_ready = 1;
         case (reg_a)
-            6'h00: mem_rdata = 32'h4F47_0001;                       // "OG", version
+            6'h00: mem_rdata = 32'h4F47_0002;                       // "OG", version (2: stream engine)
             6'h01: mem_rdata = {16'd0, in_q};
             6'h02: mem_rdata = ms;
             6'h03: mem_rdata = {frames, 10'd0, remote, stat_buf, dirty, stat_2x, stat_gbc};
             6'h19: mem_rdata = {29'd0, gpio_in};
             6'h1A: mem_rdata = {20'd0, rx_new, 3'd0, rx_byte};
+            6'h1B: begin mem_ready = ~se_own; mem_rdata = {24'd0, se_rows}; end
             6'h0C: mem_ready = ~u_busy;
             6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout; mem_rdata = {31'd0, ev}; end
             6'h0E: mem_rdata = ctrl;
@@ -282,7 +304,10 @@ always @(posedge clk) begin
     if (cram_wr & ~cram_d) dirty <= 1;
     if (frame_tick) frames <= frames + 1'd1;
 
-    // UART
+    // UART (the stream engine loads bytes while it runs)
+    se_start <= 0;
+    if (se_own && !se_busy && !se_start) se_own <= 0;
+    if (se_tx_take) begin u_sh <= {1'b1, se_tx_byte, 1'b0}; u_n <= 4'd10; u_cnt <= uart_div - 1'd1; end
     if (u_n != 0) begin
         if (u_cnt == 0) begin
             u_cnt <= uart_div - 1'd1;
@@ -304,11 +329,13 @@ always @(posedge clk) begin
             6'h18: prn_tx <= mem_wdata[7:0];
             6'h19: gpio_out <= mem_wdata[2:0];
             6'h1A: uart_div <= mem_wdata[11:0];
+            6'h1B: begin se_base <= mem_wdata[20:0]; se_fix <= mem_wdata[31:24]; se_start <= 1; se_own <= 1; end
+            6'h1C: se_htab <= mem_wdata[20:0];
             default: ;
         endcase else case (reg_a)
             6'h03: begin dirty <= 0; remote <= 0; end
             6'h18: prn_valid <= 0;
-            6'h1A: rx_new <= 0;
+            6'h1A: if (!uart_seen) rx_new <= 0;          // a byte arriving in this cycle stays flagged
             6'h0D, 6'h12: ev <= 0;
             default: ;
         endcase
@@ -330,7 +357,7 @@ always @(posedge clk) begin
         ctrl   <= 32'h0000_0001;          // core held in reset until a game is loaded
         cfg    <= 32'h0000_0000;
         u_n    <= 0; u_sh <= 10'h3FF;
-        uart_div <= UDIV[11:0]; rx_new <= 0;
+        uart_div <= UDIV[11:0]; rx_new <= 0; se_own <= 0; se_start <= 0;
         ev     <= 0; dirty <= 0;
         ms     <= 0; ms_div <= 0; wait_cnt <= 0;
     end

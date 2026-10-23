@@ -47,6 +47,21 @@ Studio (Remote → live picture) and the Android app (Remote → live) show the 
 - Pixels come straight from the framebuffer: GBC 15-bit colour, or a DMG shade in bits 1:0.
 - Only rows that changed since the last frame are sent. A still screen costs nothing, and a typical game sends a few rows per frame.
 - A full redraw (scrolling, a scene change) is about 20–45 KB, roughly 0.1–0.25 s at 2 Mbaud. That is the floor on latency: USB-UART is the only data path to the PC.
+- With bitstream 1.5 the `R` rows come from a hardware engine (`rtl/sys/scr_engine.sv`): it hashes each row, compares it with a table in SDRAM and encodes it while the menu CPU waits, so the link, not the CPU, sets the frame rate. Firmware 1.4 does the same in software at about 6 fps; firmware 1.5 uses the engine when `REG_ID` reports version 2.
+
+## Update over USB
+
+Firmware 1.5 or newer installs a new firmware or bitstream over the same USB-UART: no JTAG and no WinUSB driver. Bitstream 1.5 is needed for reliable transfers, because older bitstreams lose about one received byte in 160.
+
+```sh
+python tools/uart_update.py opgbc_fw.bin            # firmware
+python tools/uart_update.py opgbc_fpga.bin --fpga   # bitstream, then switch the power off and on
+```
+
+**Protocol:**
+1. The host sends `Y` at 115200. The firmware answers `#UPD 503676`, pauses the core and switches to that rate (the host opens the nearest round value, 500000). The UART keeps a single received byte, so the CPU polls it in a tight loop.
+2. The host sends `OPUP`, the target (0 firmware, 1 bitstream) and the u32 size. Then it sends the file in 4 KB blocks, each followed by its u16 byte sum. Each step gets one answer: `K` (accepted), `R` (send that block again) or `E` (given up).
+3. After the last `K` both sides go back to 115200. The firmware writes and verifies the flash like System Update and logs `#UPD ok` or `#UPD fail`.
 
 ## tools/remote.py
 

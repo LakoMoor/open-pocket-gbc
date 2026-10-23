@@ -798,6 +798,8 @@ static void flash_del_game(int idx) {
 #define UPD_FPGA  "/opgbc_fpga.bin"
 #define FW_ADDR   0x100000u
 #define FPGA_MAX  0x100000u
+#define UPD_BUF   0x100000u            // the file while it is installed: in the game ROM area (1 MB), so
+                                       // the firmware restarts afterwards (TMP_BUF is only 128 KB)
 
 typedef struct { int present; uint32_t size; char ver[16]; int valid; } updfile_t;
 static updfile_t upd_fw, upd_fpga;
@@ -845,7 +847,7 @@ static void upd_screen(const char *what, const char *file, int step, uint32_t do
     lcd_present();
 }
 
-// reads a whole update file into SDRAM at TMP_BUF; returns its size or 0
+// reads a whole update file into SDRAM at UPD_BUF; returns its size or 0
 static uint32_t upd_read(const char *path, uint32_t max, const char *what) {
     FIL f;
     if (!sd_mounted || f_open(&f, path, FA_READ) != FR_OK) return 0;
@@ -855,7 +857,7 @@ static uint32_t upd_read(const char *path, uint32_t max, const char *what) {
         upd_screen(what, path + 1, 0, o, size);
         UINT br;
         uint32_t n = size - o < 0x8000 ? size - o : 0x8000;
-        if (f_read(&f, (void *)sdram(TMP_BUF + o), n, &br) != FR_OK || br != n) { f_close(&f); return 0; }
+        if (f_read(&f, (void *)sdram(UPD_BUF + o), n, &br) != FR_OK || br != n) { f_close(&f); return 0; }
     }
     f_close(&f);
     return size;
@@ -904,29 +906,35 @@ static void upd_probe(void) {
 }
 
 // writes the file to flash and checks it; 0 when the flash holds it
+static int upd_flash(int fpga, uint32_t size, const char *file);
 static int upd_install(int fpga) {
     const char *path = fpga ? UPD_FPGA : UPD_FW;
+    uint32_t size = upd_read(path, fpga ? FPGA_MAX : 0x70004, fpga ? "FPGA bitstream" : "Firmware");
+    if (!size) { message_screen("Can't read the file", path + 1); wait_ms(2000); return -1; }
+    return upd_flash(fpga, size, path + 1);
+}
+
+// the update in SDRAM at UPD_BUF goes to flash and is read back
+static int upd_flash(int fpga, uint32_t size, const char *file) {
     const char *what = fpga ? "FPGA bitstream" : "Firmware";
     uint32_t addr = fpga ? 0 : FW_ADDR;
-    uint32_t size = upd_read(path, fpga ? FPGA_MAX : 0x70004, what);
-    if (!size) { message_screen("Can't read the file", path + 1); wait_ms(2000); return -1; }
     uint32_t len = (size + 0xFFF) & ~0xFFFu;
-    for (uint32_t o = size; o < len; o++) sdram(TMP_BUF)[o] = 0xFF;
+    for (uint32_t o = size; o < len; o++) sdram(UPD_BUF)[o] = 0xFF;
     for (uint32_t o = 0; o < len; o += 0x10000) {
-        upd_screen(what, path + 1, 1, o, len);
+        upd_screen(what, file, 1, o, len);
         uint32_t n = len - o < 0x10000 ? len - o : 0x10000;
-        flash_write_sdram(addr + o, TMP_BUF + o, n);
+        flash_write_sdram(addr + o, UPD_BUF + o, n);
     }
     // verify in 32 KB pieces
     int bad = 0;
     for (uint32_t o = 0; o < size && !bad; o += 0x8000) {
-        upd_screen(what, path + 1, 2, o, size);
+        upd_screen(what, file, 2, o, size);
         uint32_t n = size - o < 0x8000 ? size - o : 0x8000;
         flash_read_sdram(addr + o, TMP_BUF2, n);
-        volatile uint8_t *a = sdram(TMP_BUF + o), *b = sdram(TMP_BUF2);
+        volatile uint8_t *a = sdram(UPD_BUF + o), *b = sdram(TMP_BUF2);
         for (uint32_t i = 0; i < n; i++) if (a[i] != b[i]) { bad = 1; break; }
     }
-    upd_screen(what, path + 1, bad ? 2 : 3, size, size);
+    upd_screen(what, file, bad ? 2 : 3, size, size);
     logf("update %s: %u bytes, %s\n", what, size, bad ? "VERIFY FAILED" : "ok");
     return bad ? -1 : 0;
 }
@@ -1418,6 +1426,8 @@ static void reset_game(void) {
 // The app sends 'V' (at 115200): the firmware answers "#SCR <baud>", switches the UART (TX and
 // the remote's RX) to ~2 Mbaud and streams the picture until 'v' or 2 s without a byte (the app
 // sends '.' every half second). Packets: 0x00, type, u16 length, payload; log text goes between them.
+// A byte 0x88..0x9F while streaming sets the bit time to (byte - 0x80) clocks (33.75 MHz / 8 =
+// 4.2 Mbaud ... / 31): the firmware goes quiet until a byte arrives at the new rate.
 //   'P' mode: gbc, gbc_raw, dmg palette (4 x RGB)       'O' OSD: flags (1 shown, 2 dim), 42x24 cells
 //   'L' LCD text: flags, 16x12 cells                   'G' a changed row: y, PackBits of 160 x u16
 //   'F' end of frame: u16 frame counter
@@ -1429,6 +1439,7 @@ static int      scr_on, scr_buf = -1, scr_mode = -1, scr_osd_flags = -1;
 static uint32_t scr_rx_ms, scr_osd_ver, scr_lcd_ver, scr_keep_ctrl;
 static uint16_t scr_frame;
 static uint32_t scr_hash[144];        // per row, of the frame as last sent
+#define SCR_HTAB  0x770000u            // the stream engine's hash table (144 words)
 static int      scr_fix, scr_rows;     // scr_rows: 'R' rows (no length) instead of 'G'
 
 static inline void scr_put(uint32_t b) { UART_TX = b; }          // the UART takes bits 7:0
@@ -1444,6 +1455,8 @@ static void scr_start(int rows) {
     scr_buf = scr_mode = scr_osd_flags = -1;
     scr_osd_ver = scr_lcd_ver = ~0u;
     for (int i = 0; i < 144; i++) scr_hash[i] = 0x5A5A5A5Au;           // every row counts as changed
+    volatile uint32_t *ht = (volatile uint32_t *)sdram(SCR_HTAB);
+    for (int i = 0; i < 144; i++) ht[i] = 0x5A5A5A5Au;
     scr_keep_ctrl = ctrl & C_FB_FORCE;
 }
 static void scr_stop(void) {
@@ -1519,13 +1532,107 @@ static void scr_cells(char t, const uint16_t *c, int n, int flags) {
     if (flags & 1) for (int i = 0; i < n; i++) { scr_put(c[i]); scr_put(c[i] >> 8); }
 }
 
+// ---------------------------------------------------------------- update over the USB-UART
+// 'Y' (at 115200): the firmware answers "#UPD <baud>" and switches to ~500 kbaud. The host sends
+// "OPUP", the target (0 firmware, 1 bitstream) and the u32 size, then the file in 4 KB blocks,
+// each followed by its u16 byte sum. Every step is answered: 'K' accepted, 'R' send that block
+// again, 'E' given up. The UART keeps one received byte, so the CPU polls in a tight loop
+// (about 20 us per byte at this rate) with the core paused. Then the firmware goes back to
+// 115200, writes and verifies the flash like System Update and logs "#UPD ok" or "#UPD fail".
+#define UDIV_UPD 67                    // 503.7 kbaud
+
+__attribute__((noinline, optimize("O2"))) static int upd_rx(volatile uint8_t *dst, uint32_t n, uint32_t *sum) {
+    uint32_t s = 0, t0 = ms_now(), limit = 400 + n / 16;          // ms; a block takes ~170 ms
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t r, spin = 0;
+        while (!((r = REG_UART) & 0x800)) if (!(++spin & 255) && ms_now() - t0 > limit) return -1;
+        dst[i] = (uint8_t)r;
+        s += r & 255;
+    }
+    *sum = s;
+    return 0;
+}
+
+static void upd_drain(void) {          // until 30 ms of silence
+    uint32_t t = ms_now();
+    while (ms_now() - t < 30) if (REG_UART & 0x800) t = ms_now();
+}
+
+static void upd_uart(void) {
+    logf("#UPD %u\n", 33750000u / UDIV_UPD);
+    wait_ms(40);
+    uint32_t keep = ctrl;
+    ctrl |= C_PAUSE | C_OSD;
+    ctrl_write();
+    REG_UART = UDIV_UPD;
+    uint8_t h[9];
+    uint32_t sum, size = 0;
+    int fpga = 0, ok = 0, r = -1;
+    for (int t = 0; t < 10 && !ok; t++) {               // the host repeats the header until 'K'
+        if (upd_rx(h, 9, &sum)) { upd_drain(); continue; }
+        fpga = h[4];
+        size = h[5] | h[6] << 8 | h[7] << 16 | (uint32_t)h[8] << 24;
+        ok = !memcmp(h, "OPUP", 4) && fpga < 2 && size >= 16 && size <= (fpga ? FPGA_MAX : 0x70004);
+        if (!ok) { upd_drain(); scr_put('R'); }
+    }
+    if (!ok) { scr_put('E'); goto out; }
+    const char *what = fpga ? "FPGA bitstream" : "Firmware";
+    upd_screen(what, "over USB", 0, 0, size);
+    scr_put('K');
+    for (uint32_t o = 0; o < size; o += 0x1000) {
+        uint32_t n = size - o < 0x1000 ? size - o : 0x1000;
+        int tries = 0;
+        for (;;) {
+            uint8_t ck[2];
+            uint32_t s2;
+            if (!upd_rx(sdram(UPD_BUF + o), n, &sum) && !upd_rx(ck, 2, &s2) && (uint16_t)sum == (ck[0] | ck[1] << 8)) break;
+            if (++tries > 8) { upd_drain(); scr_put('E'); goto out; }
+            upd_drain();
+            scr_put('R');
+        }
+        if (!(o & 0xFFFF)) upd_screen(what, "over USB", 0, o, size);
+        scr_put('K');
+    }
+    if (!fpga) {                                         // fw.bin: u32 length, then the code
+        uint32_t l = 0;
+        for (int i = 3; i >= 0; i--) l = l << 8 | sdram(UPD_BUF)[i];
+        if (l + 4 != size) { wait_ms(50); REG_UART = UDIV_SLOW; logf("#UPD fail: not a firmware file\n"); goto out; }
+    }
+    wait_ms(50);                                         // the host is back at 115200
+    REG_UART = UDIV_SLOW;
+    r = upd_flash(fpga, size, "over USB");
+    logf("#UPD %s\n", r ? "fail" : "ok");
+    wait_ms(600);
+    if (r) message_screen("Verify failed", "send the file again");
+    else if (fpga) message_screen("Bitstream installed", "switch the power off and on");
+    else message_screen("Firmware installed", "restarting");
+    wait_ms(r || fpga ? 3000 : 1200);
+    reboot_firmware();
+out:
+    REG_UART = UDIV_SLOW;
+    if (size && ok) { wait_ms(1500); reboot_firmware(); }   // the game ROM area held the file
+    ctrl = keep;
+    ctrl_write();
+    osd_invalidate();
+}
+
+static uint32_t scr_pend;              // a byte read between rows, handled at the next poll
+
 static void scr_poll(void) {
     uint32_t r = REG_UART;
+    if (scr_pend) { if (!(r & 0x800)) r = scr_pend; scr_pend = 0; }
     if (r & 0x800) {
         uint8_t c = (uint8_t)r;
         scr_rx_ms = ms_now();
         if ((c == 'V' || c == 'W') && !scr_on) { scr_start(c == 'W'); return; }
+        if (c == 'Y' && !scr_on) { upd_uart(); return; }
         else if (c == 'v' && scr_on) { scr_stop(); return; }
+        else if (scr_on && c >= 0x88 && c < 0xA0) {   // 0x80 + divider: go quiet, then switch the rate
+            wait_ms(2);                                   // the host resumes with a byte at the new rate
+            REG_UART = c - 0x80u;
+            scr_on = 2;
+            return;
+        }
         else if (scr_on == 2) scr_on = 1;
     }
     if (!scr_on) return;
@@ -1555,12 +1662,17 @@ static void scr_poll(void) {
     scr_buf = buf; scr_frame = fr;
     const volatile uint32_t *fb = (const volatile uint32_t *)sdram(FB_BASE + (uint32_t)buf * 0x10000);
     scr_fix = scr_fix < 143 ? scr_fix + 1 : 0;
+    if (scr_rows && (REG_ID & 0xFFFF) >= 2) {          // the bitstream encodes the rows itself
+        REG_SE_HTAB = SCR_HTAB >> 2;
+        REG_SE = (uint32_t)scr_fix << 24 | (FB_BASE + (uint32_t)buf * 0x10000) >> 2;
+        (void)REG_SE;
+    } else
     for (int y = 0; y < 144; y++) {
         const volatile uint32_t *f = fb + y * 80;
         uint32_t h = scr_row_hash(f);
         if (h == scr_hash[y] && y != scr_fix) continue;
         uint32_t r = REG_UART;                 // stop at once: the BL616 can hang on data nobody reads
-        if (r & 0x800) { scr_rx_ms = ms_now(); if ((uint8_t)r == 'v') { scr_stop(); return; } }
+        if (r & 0x800) { scr_rx_ms = ms_now(); if ((uint8_t)r == 'v') { scr_stop(); return; } scr_pend = r; }
         scr_hash[y] = h;
         if (scr_rows) { scr_put(0); scr_put('R'); }
         else { scr_hdr('G', 1 + scr_enc_len(f)); }
@@ -3184,7 +3296,7 @@ static int activate(item_t *it, int dir) {
         else if (upd_sel) message_screen("Bitstream installed", "switch the power off and on");
         else message_screen("Firmware installed", "restarting");
         wait_ms(r || upd_sel ? 3000 : 1200);
-        if (!r && !upd_sel) reboot_firmware();
+        reboot_firmware();                              // the game ROM area held the file
         osd_invalidate();
         go(P_UPDATE, 0);
         break;

@@ -124,7 +124,11 @@ object Board : SerialInputOutputManager.Listener {
         keepalive?.interrupt(); keepalive = null
         write("v")
         writer.execute {
+            // back to 115200 only once the stream is quiet: data at 2 Mbaud into a port at 115200
+            // can hang the BL616 (the firmware finishes the frame it is sending)
+            val t0 = System.currentTimeMillis()
             Thread.sleep(60)
+            while (System.currentTimeMillis() - lastRx < 150 && System.currentTimeMillis() - t0 < 2000) Thread.sleep(30)
             try { port?.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE) } catch (_: Exception) {}
             fast = false
         }
@@ -159,7 +163,9 @@ object Board : SerialInputOutputManager.Listener {
         LiveScreen.packet('G', g, g.size)
     }
 
+    @Volatile private var lastRx = 0L
     override fun onNewData(data: ByteArray) {
+        lastRx = System.currentTimeMillis()
         if (!fast) { onText(data); return }
         for (b in data) {
             val v = b.toInt() and 255

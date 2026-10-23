@@ -26,6 +26,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -185,6 +187,8 @@ fun RemoteScreen() {
         note = "live · %.0f fps".format(LiveScreen.fps)
     }
     DisposableEffect(Unit) { onDispose { Board.stopScreen() } }
+    var full by remember { mutableStateOf(false) }
+    if (full && live && liveHdmi != null) { FullPlay(liveHdmi, tick) { full = false }; return }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         if (live && liveHdmi != null) {
             Screen(liveHdmi, Modifier.fillMaxWidth().aspectRatio(720f / 480f), tick)
@@ -202,6 +206,8 @@ fun RemoteScreen() {
             Text("live", color = Dim, fontSize = 13.sp)
             if (live && liveHdmi != null) {
                 Spacer(Modifier.width(12.dp))
+                Pill("Full screen") { full = true }
+                Spacer(Modifier.width(8.dp))
                 Pill("Screenshot") {
                     note = try { "Saved to Pictures/OpenPocket: " + LiveScreen.saveShot(ctx) + ".png" } catch (e: Exception) { "Screenshot: ${e.message}" }
                 }
@@ -235,6 +241,40 @@ fun RemoteScreen() {
             Key('X', "RESET GAME", Modifier.height(36.dp).width(130.dp), pill = true)
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+// the live picture over the whole screen in landscape, with translucent touch buttons on top
+@Composable
+private fun FullPlay(img: ImageBitmap?, tick: Int, exit: () -> Unit) {
+    val act = LocalContext.current as? android.app.Activity
+    DisposableEffect(Unit) {
+        val old = act?.requestedOrientation
+        act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose { if (old != null) act.requestedOrientation = old }
+    }
+    androidx.activity.compose.BackHandler(onBack = exit)
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        if (img != null) key(tick) {
+            Image(img, null, Modifier.fillMaxHeight().aspectRatio(720f / 480f).align(Alignment.Center), filterQuality = FilterQuality.None)
+        }
+        val a = Modifier.alpha(0.55f)
+        Column(a.align(Alignment.BottomStart).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Key('U', "▲", Modifier.size(62.dp))
+            Row { Key('L', "◀", Modifier.size(62.dp)); Spacer(Modifier.size(62.dp)); Key('R', "▶", Modifier.size(62.dp)) }
+            Key('D', "▼", Modifier.size(62.dp))
+        }
+        Row(a.align(Alignment.BottomEnd).padding(20.dp).rotate(-18f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Key('B', "B", Modifier.size(74.dp), round = true)
+            Key('A', "A", Modifier.size(74.dp).offset(y = (-16).dp), round = true)
+        }
+        Row(a.align(Alignment.BottomCenter).padding(bottom = 10.dp)) {
+            Key('S', "SELECT", Modifier.height(38.dp).width(84.dp), pill = true)
+            Key('M', "MENU", Modifier.height(38.dp).width(72.dp), pill = true)
+            Key('T', "START", Modifier.height(38.dp).width(84.dp), pill = true)
+        }
+        Box(a.align(Alignment.TopEnd).padding(12.dp).size(44.dp).clip(RoundedCornerShape(50)).background(Panel2)
+            .clickable(onClick = exit), contentAlignment = Alignment.Center) { Text("✕", color = Text, fontSize = 18.sp) }
     }
 }
 

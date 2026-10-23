@@ -71,6 +71,61 @@ function runLoader(args, label, step, steps) {
   });
 }
 
+// Install over the USB-UART (firmware 1.5+, docs/remote.md "Update over USB"): no JTAG driver needed.
+let updRx = null;                          // while set, onData hands the raw bytes here
+async function uartUpdate(data, fpga, label, step, steps) {
+  if (!(await connect())) throw new Error('no board on USB');
+  if (scrOn) { screen(false); await sleep(800); }
+  const job = (pct, phase) => send('job', { state: 'step', label, step, steps, pct, phase });
+  job(0, 'Starting (USB serial)');
+  let text = '', replies = [];
+  try {
+    updRx = d => { text += d.toString('latin1'); };
+    const t0 = Date.now();
+    while (!text.includes('#UPD ')) {
+      if (Date.now() - t0 > 12000) throw new Error('the board did not answer: installing over USB serial needs firmware 1.5 or newer');
+      port.write('Y'); await sleep(300);
+    }
+    await sleep(50);
+    const baud = Math.round(parseInt(text.split('#UPD ')[1], 10) / 50000) * 50000;   // "#UPD 503676" -> 500000
+    await new Promise((res, rej) => port.update({ baudRate: baud }, e => e ? rej(e) : res()));
+    updRx = d => { for (const b of d) if (b === 75 || b === 82 || b === 69) replies.push(b); };
+    const reply = async ms => { const t = Date.now(); while (!replies.length) { if (Date.now() - t > ms) return null; await sleep(4); } return replies.shift(); };
+    const hdr = Buffer.alloc(9); hdr.write('OPUP'); hdr[4] = fpga ? 1 : 0; hdr.writeUInt32LE(data.length, 5);
+    let r = null;
+    for (let t = 0; t < 6 && r !== 75; t++) { port.write(hdr); r = await reply(1500); if (r === 69) throw new Error('the board refused the file'); }
+    if (r !== 75) throw new Error('no answer to the header');
+    for (let o = 0; o < data.length; o += 4096) {
+      const blk = data.subarray(o, o + 4096);
+      let sum = 0; for (const b of blk) sum += b;
+      const ck = Buffer.from([sum & 255, (sum >> 8) & 255]);
+      let ok = false;
+      for (let t = 0; t < 8 && !ok; t++) {
+        port.write(Buffer.concat([blk, ck]));
+        r = await reply(3000);
+        if (r === 75) ok = true; else if (r !== 82) throw new Error(`transfer failed at ${o.toString(16)}`);
+      }
+      if (!ok) throw new Error(`transfer failed at ${o.toString(16)}`);
+      job((o + blk.length) / data.length * 60, 'Sending');
+    }
+    text = '';
+    updRx = d => { text += d.toString('latin1'); };
+    await new Promise((res, rej) => port.update({ baudRate: 115200 }, e => e ? rej(e) : res()));
+    job(60, 'Writing');
+    const t1 = Date.now();
+    while (!/#UPD (ok|fail)/.test(text)) {
+      if (Date.now() - t1 > 120000) throw new Error('no result from the board');
+      await sleep(100);
+      job(Math.min(99, 60 + (Date.now() - t1) / 400), 'Writing');
+    }
+    if (text.includes('#UPD fail')) throw new Error('writing the flash failed: ' + text.split('#UPD fail')[1].split('\n')[0]);
+    log(fpga ? 'bitstream installed over USB serial: switch the power off and on\n' : 'firmware installed over USB serial; it restarts\n');
+  } finally {
+    updRx = null;
+    if (port && port.isOpen) { port.write('0'); }              // file bytes also count as remote keys: release all
+  }
+}
+
 // items: [{kind: 'bitstream'|'firmware'|'games'|'sram', file}]
 let busy = false;
 async function install(items) {
@@ -88,7 +143,15 @@ async function install(items) {
         args = file.endsWith('.fs') ? [...bin, file] : [...bin, '-o', '0', '--file-type', 'bin', file];
       } else if (kind === 'firmware') { label = 'Firmware'; args = [...bin, '-o', '0x100000', '--file-type', 'bin', file]; }
       else { label = 'Games'; args = [...bin, '-o', '0x200000', '--file-type', 'bin', file]; }
-      await runLoader(args, label, i, items.length);
+      try {
+        await runLoader(args, label, i, items.length);
+      } catch (e) {
+        // no JTAG (driver, tools): firmware and bitstream also go over the USB serial port
+        if (kind !== 'firmware' && kind !== 'bitstream') throw e;
+        log(`${e.message}; trying USB serial\n`);
+        const data = file.endsWith('.fs') ? fsToBin(file) : fs.readFileSync(file);
+        await uartUpdate(data, kind === 'bitstream', label + ' (USB serial)', i, items.length);
+      }
     }
     send('job', { state: 'done', msg: items.length > 1 ? 'Everything installed' : 'Installed' });
   } catch (e) {
@@ -214,7 +277,18 @@ function screen(on) {
     }, 330);
   } else {
     clearInterval(scrTimer); scrTimer = null;
-    if (port && port.isOpen) { port.write('v'); setTimeout(() => { if (port && port.isOpen) port.update({ baudRate: 115200 }); scrFast = false; }, 60); }
+    // back to 115200 only once the stream is quiet: data at 2 Mbaud into a port at 115200 can hang
+    // the BL616 (the firmware finishes the frame it is sending)
+    if (port && port.isOpen) {
+      port.write('v');
+      const t0 = Date.now();
+      const done = () => {
+        if (Date.now() - lastRx < 150 && Date.now() - t0 < 2000) { setTimeout(done, 30); return; }
+        if (port && port.isOpen) port.update({ baudRate: 115200 });
+        scrFast = false;
+      };
+      setTimeout(done, 60);
+    }
   }
 }
 function onBinary(d) {
@@ -247,7 +321,10 @@ function onBinary(d) {
   if (scrPk.length > 40) { send('scr', scrPk); scrPk = []; }
   return text;
 }
+let lastRx = 0;
 function onData(d) {
+  lastRx = Date.now();
+  if (updRx) { updRx(d); return; }
   if (scrFast) { const t = onBinary(d); if (!t) return; d = Buffer.from(t, 'latin1'); }
   rx += d.toString('latin1');
   if (scrOn && !scrFast && rx.includes('#SCR ')) {
@@ -332,6 +409,14 @@ ipcMain.handle('sd', async (_, drive, source) => {
 ipcMain.handle('key', (_, k, down) => key(k, down));
 ipcMain.handle('connect', () => connect());
 ipcMain.handle('shot', () => menuShot());
+// a recording of the live picture (WebM from the renderer's MediaRecorder)
+ipcMain.handle('save-video', async (_, bytes) => {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
+  const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('videos'), `openpocket_${stamp}.webm`), filters: [{ name: 'WebM video', extensions: ['webm'] }] });
+  if (r.canceled || !r.filePath) return null;
+  fs.writeFileSync(r.filePath, Buffer.from(bytes));
+  return r.filePath;
+});
 // screenshots of the live picture: [[suffix, base64 png], ...]; the first file picks the name
 ipcMain.handle('save-pngs', async (_, files) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
