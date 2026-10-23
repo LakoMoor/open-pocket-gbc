@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('studio', {
   rtlKey: bits => ipcRenderer.invoke('rtl-key', bits),
   rtlRemote: ch => ipcRenderer.invoke('rtl-remote', ch),
   screen: on => ipcRenderer.invoke('screen', on),
+  savePngs: files => ipcRenderer.invoke('save-pngs', files),
   rtlStop: () => ipcRenderer.invoke('rtl-stop'),
   on: (ch, fn) => ipcRenderer.on(ch, (_, d) => fn(d)),
 });

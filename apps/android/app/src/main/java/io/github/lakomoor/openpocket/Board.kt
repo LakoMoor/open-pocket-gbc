@@ -95,7 +95,8 @@ object Board : SerialInputOutputManager.Listener {
         return grab("LCD-BEGIN", "LCD-END", 16) to grab("OSD-BEGIN", "OSD-END", 42)
     }
 
-    // ---- live screen: 'V' asks the firmware to switch to ~2 Mbaud and stream (see LiveScreen)
+    // ---- live screen: 'W' asks the firmware to switch to ~2 Mbaud and stream (see LiveScreen); rows
+    // come as 'R' (word PackBits without a length). Firmware 1.3 knows only 'V' and 'G' rows.
     private val _live = MutableStateFlow(false)
     val live = _live.asStateFlow()
     @Volatile private var fast = false
@@ -105,12 +106,14 @@ object Board : SerialInputOutputManager.Listener {
     fun startScreen() {
         if (port == null || _live.value) return
         _live.value = true
-        write("V")
+        write("W")
         keepalive = Thread {
-            // the firmware keeps only the last byte it received: until it answers, send nothing but 'V'
+            // the firmware keeps only the last byte it received: until it answers, send nothing but
+            // 'W' (after ~2 s also 'V' for firmware 1.3)
+            var ask = 0
             while (_live.value && port != null) {
                 try { Thread.sleep(if (fast) 500L else 300L) } catch (_: InterruptedException) { break }
-                write(if (fast) "." else "V")
+                write(if (fast) "." else if (++ask > 6 && ask % 2 == 1) "V" else "W")
             }
         }.also { it.isDaemon = true; it.start() }
     }
@@ -131,6 +134,7 @@ object Board : SerialInputOutputManager.Listener {
         writer.execute {
             try {
                 port?.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                pState = 0
                 port?.write(".".toByteArray(), 200)       // the firmware starts sending once a byte arrives at the new rate
                 fast = true
                 appendLog("screen stream at $baud baud\n")
@@ -143,17 +147,42 @@ object Board : SerialInputOutputManager.Listener {
     private val pBuf = ByteArray(4096)
     private val text = java.io.ByteArrayOutputStream()
 
+    private var rY = 0; private var rN = 0; private var rC = 0; private var rK = 0; private var rX = 0
+    private val rW = IntArray(80)
+    private fun rowToG() {
+        val g = ByteArray(323)
+        g[0] = rY.toByte(); g[1] = 127; g[258] = 31
+        for (i in 0 until 80) {
+            val o = (if (i < 64) 2 else 3) + i * 4; val w = rW[i]
+            g[o] = w.toByte(); g[o + 1] = (w shr 8).toByte(); g[o + 2] = (w shr 16).toByte(); g[o + 3] = (w ushr 24).toByte()
+        }
+        LiveScreen.packet('G', g, g.size)
+    }
+
     override fun onNewData(data: ByteArray) {
         if (!fast) { onText(data); return }
         for (b in data) {
             val v = b.toInt() and 255
             when (pState) {
                 0 -> if (v == 0) pState = 1 else text.write(v)
-                1 -> { pType = v.toChar(); pState = 2 }
+                1 -> { pType = v.toChar(); pState = if (pType == 'R') 6 else 2 }
                 2 -> { pLen = v; pState = 3 }
                 3 -> { pLen = pLen or (v shl 8); pPos = 0; pState = if (pLen == 0) { LiveScreen.packet(pType, pBuf, 0); 0 } else if (pLen > pBuf.size) 5 else 4 }
                 4 -> { pBuf[pPos++] = b; if (pPos == pLen) { LiveScreen.packet(pType, pBuf, pLen); pState = 0 } }
                 5 -> if (++pPos == pLen) pState = 0                // oversized: skip
+                // 'R': y, then PackBits over the row's 80 words (c < 128: c + 1 literal words, else
+                // c - 126 copies of one word); handed on as a 'G' row of two literal runs
+                6 -> { rY = v; rN = 0; pState = 7 }
+                7 -> { rC = v; rK = 0; rX = 0; pState = 8 }
+                8 -> {
+                    rX = rX or (v shl (8 * rK++))
+                    if (rK == 4) {
+                        rK = 0
+                        if (rC < 128) { if (rN < 80) rW[rN++] = rX; rX = 0; if (rC-- == 0) pState = 7 }
+                        else { var r = rC - 126; while (r-- > 0 && rN < 80) rW[rN++] = rX; pState = 7 }
+                        if (pState == 7 && rN >= 80) { rowToG(); pState = 0 }
+                    }
+                }
             }
         }
         if (text.size() > 0) { onText(text.toByteArray()); text.reset() }

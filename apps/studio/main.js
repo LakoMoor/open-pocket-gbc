@@ -195,17 +195,23 @@ async function connect() {
     port.on('error', e => log(`serial: ${e.message}\n`));
   });
 }
-// ---- live screen: 'V' makes the firmware switch to ~2 Mbaud and stream the picture (fw scr_poll)
+// ---- live screen: 'W' makes the firmware switch to ~2 Mbaud and stream the picture (fw scr_poll);
+// rows come as 'R' (word PackBits without a length) and are handed on as 'G' packets
 let scrOn = false, scrFast = false, scrTimer = null, scrPk = [];
 const pk = { st: 0, type: 0, len: 0, pos: 0, buf: null };
 function screen(on) {
   if (on === scrOn) return;
   scrOn = on;
   if (on) {
-    port.write('V');
-    // the firmware keeps only the last byte: until it answers send 'V' only, then '.' to keep it alive
-    let n = 0;
-    scrTimer = setInterval(() => { if (port && port.isOpen && (!scrFast || ++n % 2 === 0)) port.write(scrFast ? '.' : 'V'); }, 330);
+    port.write('W');
+    // the firmware keeps only the last byte: until it answers send 'W' only, then '.' to keep it alive
+    // (firmware 1.3 knows only 'V' and 'G' rows: after ~2 s without an answer ask with 'V')
+    let n = 0, ask = 0;
+    scrTimer = setInterval(() => {
+      if (!port || !port.isOpen) return;
+      if (scrFast) { if (++n % 2 === 0) port.write('.'); }
+      else port.write(++ask > 6 && ask % 2 ? 'V' : 'W');
+    }, 330);
   } else {
     clearInterval(scrTimer); scrTimer = null;
     if (port && port.isOpen) { port.write('v'); setTimeout(() => { if (port && port.isOpen) port.update({ baudRate: 115200 }); scrFast = false; }, 60); }
@@ -216,10 +222,26 @@ function onBinary(d) {
   for (const v of d) {
     switch (pk.st) {
       case 0: if (v === 0) pk.st = 1; else text += String.fromCharCode(v); break;
-      case 1: pk.type = v; pk.st = 2; break;
+      case 1: pk.type = v; pk.st = v === 82 ? 10 : 2; break;
       case 2: pk.len = v; pk.st = 3; break;
       case 3: pk.len |= v << 8; pk.pos = 0; pk.buf = new Uint8Array(pk.len); pk.st = pk.len ? 4 : 0; if (!pk.len) scrPk.push([pk.type, pk.buf]); break;
       case 4: pk.buf[pk.pos++] = v; if (pk.pos === pk.len) { scrPk.push([pk.type, pk.buf]); pk.st = 0; if (pk.type === 70) { send('scr', scrPk); scrPk = []; } } break;
+      // 'R': y, then PackBits over the row's 80 words (c < 128: c + 1 literal words, else c - 126
+      // copies of one word), handed on as a 'G' row of two literal runs (128 + 32 pixels)
+      case 10: pk.y = v; pk.w = new Uint32Array(80); pk.n = 0; pk.st = 11; break;
+      case 11: pk.c = v; pk.k = 0; pk.x = 0; pk.st = 12; break;
+      case 12:
+        pk.x |= v << (8 * pk.k++);
+        if (pk.k < 4) break;
+        pk.k = 0;
+        if (pk.c < 128) { if (pk.n < 80) pk.w[pk.n++] = pk.x >>> 0; pk.x = 0; if (pk.c-- === 0) pk.st = 11; }
+        else { for (let r = pk.c - 126; r > 0 && pk.n < 80; r--) pk.w[pk.n++] = pk.x >>> 0; pk.st = 11; }
+        if (pk.st === 11 && pk.n >= 80) {
+          const g = new Uint8Array(1 + 2 + 320); g[0] = pk.y; g[1] = 127; g[258] = 31;
+          for (let i = 0; i < 80; i++) { const o = (i < 64 ? 2 : 3) + i * 4; g[o] = pk.w[i] & 255; g[o + 1] = (pk.w[i] >> 8) & 255; g[o + 2] = (pk.w[i] >> 16) & 255; g[o + 3] = pk.w[i] >>> 24; }
+          scrPk.push([71, g]); pk.st = 0;
+        }
+        break;
     }
   }
   if (scrPk.length > 40) { send('scr', scrPk); scrPk = []; }
@@ -229,7 +251,7 @@ function onData(d) {
   if (scrFast) { const t = onBinary(d); if (!t) return; d = Buffer.from(t, 'latin1'); }
   rx += d.toString('latin1');
   if (scrOn && !scrFast && rx.includes('#SCR ')) {
-    scrFast = true;
+    scrFast = true; pk.st = 0;
     port.update({ baudRate: 2000000 }, e => {
       log(e ? `serial: ${e.message}\n` : 'screen stream at 2 Mbaud\n');
       if (!e && port && port.isOpen) port.write('.');      // the firmware starts sending once a byte arrives at the new rate
@@ -310,6 +332,15 @@ ipcMain.handle('sd', async (_, drive, source) => {
 ipcMain.handle('key', (_, k, down) => key(k, down));
 ipcMain.handle('connect', () => connect());
 ipcMain.handle('shot', () => menuShot());
+// screenshots of the live picture: [[suffix, base64 png], ...]; the first file picks the name
+ipcMain.handle('save-pngs', async (_, files) => {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
+  const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('pictures'), `openpocket_${stamp}.png`), filters: [{ name: 'PNG', extensions: ['png'] }] });
+  if (r.canceled || !r.filePath) return null;
+  const base = r.filePath.replace(/\.png$/i, '');
+  for (const [suffix, b64] of files) fs.writeFileSync(`${base}${suffix}.png`, Buffer.from(b64, 'base64'));
+  return base + '.png';
+});
 ipcMain.handle('font', () => {
   for (const p of [path.join(ROOT, 'rtl', 'video', 'font8x8.hex'), path.join(__dirname, 'assets', 'font8x8.hex')])
     if (fs.existsSync(p)) return fs.readFileSync(p, 'ascii');

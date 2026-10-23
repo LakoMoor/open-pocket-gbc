@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.lakomoor.openpocket"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
     buildTypes {
         release {

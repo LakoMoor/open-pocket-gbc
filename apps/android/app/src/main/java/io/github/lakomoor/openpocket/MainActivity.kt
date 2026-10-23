@@ -176,7 +176,7 @@ fun RemoteScreen() {
         Board.startScreen()
         note = "Asking the board for the live picture…"
         delay(4000)
-        if (!Board.streaming) note = "The board did not answer: the live picture needs bitstream and firmware 1.3 on the board. Install both: Update › Install over USB, or SD card › System Update."
+        if (!Board.streaming) note = "The board did not answer: the live picture needs bitstream 1.3 and firmware 1.3 or newer (1.4 is faster). Install both: Update › Install over USB, or SD card › System Update."
     }
     LaunchedEffect(tick) {
         if (!live) return@LaunchedEffect
@@ -200,6 +200,12 @@ fun RemoteScreen() {
             Switch(checked = auto, onCheckedChange = { auto = it })
             Spacer(Modifier.width(6.dp))
             Text("live", color = Dim, fontSize = 13.sp)
+            if (live && liveHdmi != null) {
+                Spacer(Modifier.width(12.dp))
+                Pill("Screenshot") {
+                    note = try { "Saved to Pictures/OpenPocket: " + LiveScreen.saveShot(ctx) + ".png" } catch (e: Exception) { "Screenshot: ${e.message}" }
+                }
+            }
         }
         if (note.isNotEmpty()) Text(note, color = Dim, fontSize = 13.sp)
         Spacer(Modifier.height(18.dp))

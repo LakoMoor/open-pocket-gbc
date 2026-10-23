@@ -228,7 +228,19 @@ requestAnimationFrame(liveRender);
 $('#auto').onchange = async e => {
   const ok = await S.screen(e.target.checked);
   if (!ok) { e.target.checked = false; log('(no board on USB)\n'); return; }
-  $('#livefps').textContent = e.target.checked ? 'waiting for the picture (firmware and bitstream 1.3)…' : '';
+  $('#livefps').textContent = e.target.checked ? 'waiting for the picture (bitstream 1.3, firmware 1.3 or newer)…' : '';
+  $('#liveshot').hidden = !e.target.checked;
+};
+// the game 3x and the HDMI picture with the menu, as PNG files
+$('#liveshot').onclick = async () => {
+  const c = document.createElement('canvas'); c.width = 480; c.height = 432;
+  const g = c.getContext('2d'), img = g.createImageData(160, 144);
+  for (let i = 0; i < 160 * 144; i++) { const v = liveRgb(live.fb[i]); img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], i * 4); }
+  const t = document.createElement('canvas'); t.width = 160; t.height = 144; t.getContext('2d').putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = false; g.drawImage(t, 0, 0, 480, 432);
+  const b64 = cv => cv.toDataURL('image/png').split(',')[1];
+  const f = await S.savePngs([['', b64(c)], ['_hdmi', b64($('#osd'))]]);
+  if (f) log(`screenshot: ${f}\n`);
 };
 
 // ---------------------------------------------------------------- remote: buttons

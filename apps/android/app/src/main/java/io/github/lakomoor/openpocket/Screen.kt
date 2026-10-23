@@ -117,6 +117,29 @@ object LiveScreen {
         bmp.setPixels(hdmiPx, 0, 720, 0, 0, 720, 480)
     }
 
+    /** The game alone, scaled up by [sc] (for screenshots). */
+    fun renderGame(sc: Int): Bitmap {
+        val px = IntArray(160 * sc * 144 * sc)
+        for (y in 0 until 144 * sc) for (x in 0 until 160 * sc) px[y * 160 * sc + x] = (0xFF shl 24) or rgb(fb[(y / sc) * 160 + x / sc].toInt())
+        return Bitmap.createBitmap(px, 160 * sc, 144 * sc, Bitmap.Config.ARGB_8888)
+    }
+
+    /** Saves the game (3x) and the HDMI picture (with the menu) to Pictures/OpenPocket; returns the name. */
+    fun saveShot(ctx: android.content.Context): String {
+        val name = "openpocket_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        val hdmi = Bitmap.createBitmap(720, 480, Bitmap.Config.ARGB_8888).also { renderHdmi(it) }
+        for ((suffix, bmp) in listOf("" to renderGame(3), "_hdmi" to hdmi)) {
+            val v = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "$name$suffix.png")
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                if (android.os.Build.VERSION.SDK_INT >= 29) put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/OpenPocket")
+            }
+            val uri = ctx.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v) ?: error("no media store")
+            ctx.contentResolver.openOutputStream(uri)!!.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        return name
+    }
+
     /** The LCD picture: the game fitted to 128 x 115 (centred), the 16 x 12 menu text on top. */
     fun renderLcd(bmp: Bitmap) {
         java.util.Arrays.fill(lcdPx, 0xFF000000.toInt())
