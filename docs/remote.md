@@ -41,18 +41,18 @@ Studio (Remote → live picture) and the Android app (Remote → live) show the 
 | `L` | flags, then the 16 × 12 LCD text cells |
 | `G` | a changed row: y, then PackBits over 160 u16 pixels. A control byte c < 128 means c + 1 literal pixels follow; c ≥ 128 means c − 126 copies of the next pixel. |
 | `R` | (after `W`) a changed row without a length: `0x00`, `R`, y, then the PackBits of `G`; it ends after 160 pixels. The firmware saves a pass over the row. |
-| `M` | (after `W`, bitstream 1.5) a changed row from the hardware engine: `0x00`, `M`, y, then 10 groups of 8 words: a mask byte (bit n set: word n repeats the word before it; before the first word of the row comes 0), then the other words of the group, 4 bytes each. |
+| `M` | (after `W`, only with the optional hardware engine) a changed row: `0x00`, `M`, y, then 10 groups of 8 words: a mask byte (bit n set: word n repeats the word before it; before the first word of the row comes 0), then the other words of the group, 4 bytes each. |
 | `F` | end of frame: u16 frame counter |
 
 **Pixels and speed:**
 - Pixels come straight from the framebuffer: GBC 15-bit colour, or a DMG shade in bits 1:0.
 - Only rows that changed since the last frame are sent. A still screen costs nothing, and a typical game sends a few rows per frame.
 - A full redraw (scrolling, a scene change) is about 20–45 KB, roughly 0.1–0.25 s at 2 Mbaud. That is the floor on latency: USB-UART is the only data path to the PC.
-- With bitstream 1.5 the rows come from a hardware engine (`rtl/sys/scr_engine.sv`) as `M` rows: it hashes each row, compares it with a table in SDRAM and encodes it while the menu CPU waits, so the link, not the CPU, sets the frame rate. The mask format reads the row strictly forward, which kept the engine small enough to fit. Firmware 1.4 does the same in software at about 6 fps; firmware 1.5 uses the engine when `REG_ID` reports version 2.
+- A hardware engine for the rows is in the sources (`rtl/sys/scr_engine.sv`, `DEFS="-D SCR_ENGINE"`): it hashes each row, compares it with a table in SDRAM and sends `M` rows while the menu CPU waits, so the link instead of the CPU would set the frame rate. It does not fit next to the core on the GW2AR-18 (88% LUT, no placement with 24 seeds), so the released bitstream leaves it out and firmware 1.5 encodes the rows in software (about 6 fps). The firmware and the apps already handle it for a larger FPGA.
 
 ## Update over USB
 
-Firmware 1.5 or newer installs a new firmware or bitstream over the same USB-UART: no JTAG and no WinUSB driver. Bitstream 1.5 is needed for reliable transfers, because older bitstreams lose about one received byte in 160.
+Firmware 1.5 or newer installs a new firmware or bitstream over the same USB-UART: no JTAG and no WinUSB driver. Bitstream 1.5 is needed for reliable transfers, because older bitstreams lose about one received byte in 160. Studio falls back to it when openFPGALoader can't reach the board.
 
 ```sh
 python tools/uart_update.py opgbc_fw.bin            # firmware

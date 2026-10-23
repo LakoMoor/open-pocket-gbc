@@ -178,7 +178,7 @@ fun RemoteScreen() {
         Board.startScreen()
         note = "Asking the board for the live picture…"
         delay(4000)
-        if (!Board.streaming) note = "The board did not answer: the live picture needs bitstream 1.3 and firmware 1.3 or newer (1.4 is faster). Install both: Update › Install over USB, or SD card › System Update."
+        if (!Board.streaming) note = "The board did not answer: the live picture needs bitstream 1.3 and firmware 1.3 or newer (1.4 and later are faster). Install both: Update › Install over USB, or SD card › System Update."
     }
     LaunchedEffect(tick) {
         if (!live) return@LaunchedEffect

@@ -161,6 +161,7 @@ reg  [20:0] se_base, se_htab;
 reg   [7:0] se_fix;
 reg         se_start;
 wire        se_tx_take = se_own & se_tx_valid & (u_n == 0);
+`ifdef SCR_ENGINE
 scr_engine u_se (
     .clk(clk), .reset(reset), .start(se_start), .base(se_base), .htab(se_htab), .fix(se_fix),
     .busy(se_busy),
@@ -168,6 +169,14 @@ scr_engine u_se (
     .ack(rv_ack & se_own), .rdata(rv_rdata), .rvalid(rv_rvalid & se_own),
     .tx_valid(se_tx_valid), .tx_byte(se_tx_byte), .tx_take(se_tx_take)
 );
+localparam IO_VERSION = 16'h0002;
+`else
+// The engine does not fit next to the core on the GW2AR-18 (88% LUT, no placement): the firmware
+// encodes the rows itself. Build with DEFS="-D SCR_ENGINE" to include it.
+assign se_req = 1'b0; assign se_we = 1'b0; assign se_addr = 21'd0; assign se_wdata = 32'd0;
+assign se_busy = 1'b0; assign se_tx_valid = 1'b0; assign se_tx_byte = 8'd0;
+localparam IO_VERSION = 16'h0001;
+`endif
 
 // ------------------------------------------------------------ boot ROM
 `include "bootrom.vh"
@@ -238,7 +247,7 @@ always @* begin
     end else if (is_io) begin
         mem_ready = 1;
         case (reg_a)
-            6'h00: mem_rdata = 32'h4F47_0002;                       // "OG", version (2: stream engine)
+            6'h00: mem_rdata = {16'h4F47, IO_VERSION};             // "OG", version (2: stream engine)
             6'h01: mem_rdata = {16'd0, in_q};
             6'h02: mem_rdata = ms;
             6'h03: mem_rdata = {frames, 10'd0, remote, stat_buf, dirty, stat_2x, stat_gbc};
