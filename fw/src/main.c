@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.7"
+#define FW_VERSION      "1.7.1"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -3083,6 +3083,7 @@ static void preset_apply(int battery_preset) {
     if (battery_preset) {
         set.hdmi_off = 1; set.sdram_pd = 1; set.lcd_slow = 1; set.lcd_bri = 0;
         set.dim_idx = 2; set.led_en = 0; set.sleep_min = 1; set.poll_slow = 1; set.dbg_on = 0;
+        set.link_en = 0;            // only the LCD, the speaker and the buttons stay on
     } else {
         set.hdmi_off = 0; set.sdram_pd = 0; set.lcd_slow = 0; set.lcd_bri = 3;
         set.dim_idx = 0; set.sleep_min = 0; set.poll_slow = 0;
@@ -3092,7 +3093,7 @@ static void preset_apply(int battery_preset) {
 }
 static int preset_now(void) {
     if (set.hdmi_off && set.sdram_pd && set.lcd_slow && set.lcd_bri == 0 && set.dim_idx == 2 && !set.led_en &&
-        set.sleep_min == 1 && set.poll_slow) return 1;
+        set.sleep_min == 1 && set.poll_slow && !set.link_en) return 1;
     if (!set.hdmi_off && !set.sdram_pd && !set.lcd_slow && set.lcd_bri == 3 && !set.dim_idx && !set.sleep_min &&
         !set.poll_slow) return 0;
     return 2;

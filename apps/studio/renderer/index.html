@@ -70,6 +70,11 @@
     <div class="col wide">
       <h1>Board settings</h1>
       <p class="sub">The settings of the board's menu, over USB (firmware 1.6 or newer). A change is applied and stored on the board at once.</p>
+      <div class="row">
+        <span class="hint">Power mode</span>
+        <div class="seg" id="pmode"><button data-v="0">Normal</button><button data-v="1">Battery</button></div>
+        <span class="hint">Battery: HDMI, LEDs, link port and Bluetooth off, LCD at 30 fps and dimmed, SDRAM power-down, sleep after 5 min. The LCD, the speaker and the buttons stay.</span>
+      </div>
       <div class="row"><button class="item small" id="cfgread">Read from board</button><span class="hint" id="cfgmsg"></span></div>
       <div id="cfg" class="cfg"></div>
     </div>

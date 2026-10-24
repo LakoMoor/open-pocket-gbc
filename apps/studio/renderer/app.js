@@ -298,6 +298,17 @@ async function cfgLoad() {
   $('#cfgmsg').textContent = `${r.opts.length} settings`;
 }
 $('#cfgread').onclick = cfgLoad;
+// Normal / Battery: the Power page's Preset
+document.querySelectorAll('#pmode button').forEach(b => b.onclick = async () => {
+  $('#cfgmsg').textContent = 'switching…';
+  const r = await S.cfgList();
+  if (r.error) { $('#cfgmsg').textContent = r.error; return; }
+  const p = r.opts.find(o => o.label === 'Preset');
+  if (!p) { $('#cfgmsg').textContent = 'no Preset setting on this firmware'; return; }
+  const s = await S.cfgSet(p.page, p.item, +b.dataset.v);
+  document.querySelectorAll('#pmode button').forEach(x => x.classList.toggle('on', x === b && !s.error));
+  if (s.error) $('#cfgmsg').textContent = s.error; else cfgLoad();
+});
 
 // ---------------------------------------------------------------- remote: buttons
 document.querySelectorAll('.k').forEach(b => {

@@ -441,6 +441,24 @@ fun SettingsScreen() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         Text("Settings", color = Text, fontSize = 44.sp, fontWeight = FontWeight.Medium, letterSpacing = (-2).sp)
         Text("The board's menu settings over USB (firmware 1.6 or newer).", color = Dim, fontSize = 13.sp)
+        // Normal / Battery: the Power page's Preset
+        Text("Power mode", color = Dim, fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 14.dp))
+        Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("Normal", "Battery").forEachIndexed { v, t ->
+                Pill(t, enabled = !busy) {
+                    busy = true; note = "switching…"
+                    scope.launch {
+                        val (o, err) = withContext(Dispatchers.IO) { Board.cfgList() }
+                        val p = o.firstOrNull { it.label == "Preset" }
+                        val e2 = err ?: if (p == null) "no Preset setting on this firmware" else withContext(Dispatchers.IO) { Board.cfgSet(p, v) }
+                        busy = false
+                        if (e2 != null) note = e2 else load()
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+            }
+        }
+        Text("Battery: HDMI, LEDs, link port and Bluetooth off, LCD at 30 fps and dimmed, SDRAM power-down, sleep after 5 min. The LCD, the speaker and the buttons stay.", color = Dim, fontSize = 12.sp)
         Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Pill(if (opts.isEmpty()) "Read from board" else "Refresh", primary = opts.isEmpty(), enabled = !busy) { load() }
             Spacer(Modifier.width(12.dp))
