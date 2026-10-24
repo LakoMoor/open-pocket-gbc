@@ -4,6 +4,11 @@
 
 **Website:** https://lakomoor.github.io/open-pocket-gbc/ · [Русская версия](docs/README.ru.md) · Sister project: [Open Pocket WS](https://github.com/LakoMoor/open-pocket-ws) (WonderSwan Color)
 
+**Experimental Open Pocket GBA:** `./build.sh gba_top` builds a separate ARM/Thumb,
+SDRAM and Mode 3 diagnostic configuration. This is an incomplete GBA port; see
+[tested progress](docs/gba-progress.md), [architecture](docs/gba-architecture.md),
+[memory budget](docs/gba-memory-budget.md) and [limitations](docs/gba-compatibility.md).
+
 ![uCity running on the Tang Nano 20K with the debug overlay](docs/img/ucity.gif)
 
 The MiSTer Game Boy core runs natively on the 20K's GW2AR-18 FPGA. Video goes out over HDMI (480p, 3× scaling, with audio) and, at the same time, to a cheap 1.44" ST7735S LCD. A small RISC-V CPU inside the FPGA runs the menu firmware: it loads games from a microSD card or the on-board SPI flash, writes cartridge saves and keeps the settings. Every step from source to bitstream uses open-source tools: yosys + slang, GHDL, nextpnr-himbaechel, Apicula and openFPGALoader. No Gowin IDE is needed.

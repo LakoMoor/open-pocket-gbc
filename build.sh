@@ -17,6 +17,11 @@ case "$TOP" in
   gbc_top)
     SRCS="$(cat rtl/files.f | sed 's/#.*//' | tr '\n' ' ')"
     ;;
+  gba_top)
+    SRCS="$(cat rtl/gba/files.f | sed 's/#.*//' | tr '\n' ' ')"
+    # A failed rebuild must never leave an apparently current GBA bitstream.
+    rm -f "$OUT/$TOP.fs" "$OUT/pnr.json"
+    ;;
   *) echo "unknown top $TOP"; exit 1;;
 esac
 
@@ -33,13 +38,23 @@ yosys -q -l "$OUT/yosys.log" -m slang -p "
 "
 
 echo "== nextpnr"
+TIMING_OPT=--timing-allow-fail
+SDC=rtl/board/clocks.sdc
+if [ "$TOP" = gba_top ]; then
+  TIMING_OPT=""
+  SDC=rtl/board/gba_clocks.sdc
+fi
 # The design is close to full: when placement fails, try other placer seeds.
 rm -f "$OUT/pnr.json"                       # never pack a stale placement
 PLACED=0
 for SEED in ${SEEDS:-1 42 7 21 3 99 1234 5 13 77 256 8}; do
-  if nextpnr-himbaechel -q -l "$OUT/nextpnr.log" --json "$OUT/synth.json" --write "$OUT/pnr.json"       --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst=rtl/board/tangnano20k.cst       ${PNR_OPTS---pre-pack rtl/board/place.py --sdc rtl/board/clocks.sdc --vopt ioreg_in_iob} ${NEXTPNR_EXTRA:-}       --timing-allow-fail --seed $SEED; then
+  PNR_LOG="$OUT/nextpnr.log"
+  [ "$TOP" = gba_top ] && PNR_LOG="$OUT/nextpnr-seed-$SEED.log"
+  if nextpnr-himbaechel -q -l "$PNR_LOG" --json "$OUT/synth.json" --write "$OUT/pnr.json"       --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst=rtl/board/tangnano20k.cst       ${PNR_OPTS---pre-pack rtl/board/place.py --sdc "$SDC" --vopt ioreg_in_iob} ${NEXTPNR_EXTRA:-}       $TIMING_OPT --seed $SEED; then
+    [ "$TOP" = gba_top ] && cp "$PNR_LOG" "$OUT/nextpnr.log"
     echo "placed with seed $SEED"; PLACED=1; break
   fi
+  [ "$TOP" = gba_top ] && cp "$PNR_LOG" "$OUT/nextpnr.log"
   echo "seed $SEED failed"
 done
 
