@@ -84,7 +84,11 @@ localparam [22:0] CRAM_BASE   = 23'h600000;
 // out PLL sites in instance order, so it is instantiated (and named) first.
 wire clk_p5, clk_p, hdmi_lock;
 wire hdmi_off;                       // firmware setting: HDMI PLL powered down
-`ifdef VIDEO_720P
+`ifdef MINIMAL
+// MINIMAL (the low-power bitstream): no HDMI at all, no PLL for it; the logic on the dead pixel
+// clock is constant and synthesis drops it
+assign clk_p5 = 1'b0; assign hdmi_lock = 1'b0;
+`elsif VIDEO_720P
 pll_hdmi    u_pll_a_hdmi (.clock_in(sys_clk), .clock_out(clk_p5), .locked(hdmi_lock));  // 371.25 MHz
 `else
 pll_hdmi480 u_pll_a_hdmi (.clock_in(sys_clk), .pwrdn(hdmi_off), .clock_out(clk_p5), .locked(hdmi_lock));  // 135 MHz
@@ -92,7 +96,11 @@ pll_hdmi480 u_pll_a_hdmi (.clock_in(sys_clk), .pwrdn(hdmi_off), .clock_out(clk_p
 
 wire clk_sys, clk_sys_p, gb_lock;
 pll_gb u_pll_b_gb (.clock_in(sys_clk), .clk_sys(clk_sys), .clk_sys_p(clk_sys_p), .locked(gb_lock));
+`ifdef MINIMAL
+assign clk_p = 1'b0;
+`else
 CLKDIV #(.DIV_MODE("5")) u_div5 (.CLKOUT(clk_p), .HCLKIN(clk_p5), .RESETN(hdmi_lock), .CALIB(1'b0));
+`endif
 
 // ================================================================ resets
 reg [7:0] por_cnt = 0;
@@ -148,7 +156,11 @@ wire [11:0] pad_uart;
 wire        uart_menu, uart_reset, uart_seen;
 wire  [7:0] uart_byte;
 wire [31:0] ctrl, cfg;
+`ifdef MINIMAL
+wire        bt_en = 1'b0;
+`else
 wire        bt_en = ctrl[19];       // ZS-040 / HC-05 Bluetooth serial module on the link pins: 42 RX, 56 TX
+`endif
 wire        aud_smp;                // 48 kHz strobe and the mono sample, for the USB stream
 wire  [7:0] aud_mono8;
 wire [11:0] uart_div;              // UART bit time, set by the firmware (fast for the screen stream)
@@ -226,16 +238,31 @@ wire       loading    = ctrl[2];
 wire [1:0] sys_mode   = ctrl[4:3];
 wire       menu_open  = ctrl[5];
 wire       menu_dim   = ctrl[6];
+`ifdef MINIMAL
+// MINIMAL: HDMI, LEDs, link port, printer and Bluetooth are off for good
+assign     hdmi_off   = 1'b1;
+`else
 assign     hdmi_off   = ctrl[7];
+`endif
 wire       lcd_off    = ctrl[8];
+`ifdef MINIMAL
+wire       led_en     = 1'b0;
+`else
 wire       led_en     = ctrl[9];
+`endif
 wire       sdram_pd   = ctrl[10];     // battery mode: SDRAM power-down between accesses
 wire       lcd_slow   = ctrl[11];     // battery mode: LCD at ~30 fps
 wire       fast_fwd   = ctrl[12];
 wire       fb_force   = ctrl[13];
+`ifdef MINIMAL
+wire       link_en    = 1'b0;
+wire       prn_mode   = 1'b0;
+wire       prn_virt   = 1'b0;
+`else
 wire       link_en    = ctrl[14];
 wire       prn_mode   = ctrl[15];
 wire       prn_virt   = ctrl[16];
+`endif
 wire       prn_so;
 wire [31:0] beep;
 wire       sdram_sleep;

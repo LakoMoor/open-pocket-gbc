@@ -538,7 +538,7 @@ fun FlashCard(info: Release.Info?) {
             val i = info ?: return@Pill
             go {
                 withContext(Dispatchers.IO) {
-                    i.assets.map { a ->
+                    i.assets.filter { it.name != "opgbc_fpga_min.bin" }.map { a ->
                         val f = java.io.File(ctx.cacheDir, "release/${i.tag}/${a.name}")
                         Release.download(a, f) { p -> progress = "Download ${a.name}" to p }   // always fresh: a release can be updated
                         val addr = if ("fpga" in a.name) Flasher.BITSTREAM else Flasher.FIRMWARE
@@ -548,6 +548,25 @@ fun FlashCard(info: Release.Info?) {
             }
         }
         Pill("Choose files", enabled = progress == null) { pick.launch(arrayOf("*/*")) }
+    }
+    // the Minimal bitstream: LCD, speaker and buttons only (no HDMI, link port, LEDs): the least power
+    val minAsset = info?.assets?.firstOrNull { it.name == "opgbc_fpga_min.bin" }
+    if (minAsset != null) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Pill("Install Minimal (low power)", enabled = progress == null) {
+            val i = info ?: return@Pill
+            go {
+                withContext(Dispatchers.IO) {
+                    i.assets.filter { it.name != "opgbc_fpga.bin" }.map { a ->
+                        val f = java.io.File(ctx.cacheDir, "release/${i.tag}/${a.name}")
+                        Release.download(a, f) { p -> progress = "Download ${a.name}" to p }
+                        val addr = if ("fpga" in a.name) Flasher.BITSTREAM else Flasher.FIRMWARE
+                        FlashPart(a.name, addr, f.readBytes())
+                    }.sortedBy { it.addr }
+                }
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text("LCD, speaker, buttons; no HDMI", color = Dim, fontSize = 12.sp)
     }
     progress?.let { (n, p) ->
         Spacer(Modifier.height(14.dp))

@@ -10,7 +10,7 @@ import java.net.URL
 /** The latest GitHub release and writing its update files to the root of an SD card. */
 object Release {
     const val REPO = "LakoMoor/open-pocket-gbc"
-    val FILES = listOf("opgbc_fw.bin", "opgbc_fpga.bin")
+    val FILES = listOf("opgbc_fw.bin", "opgbc_fpga.bin", "opgbc_fpga_min.bin")   // _min: the low-power bitstream
 
     data class Asset(val name: String, val size: Long, val url: String)
     data class Info(val tag: String, val name: String, val date: String, val assets: List<Asset>)
@@ -64,7 +64,7 @@ object Release {
     fun saveTo(ctx: Context, tree: Uri, info: Info, progress: (String, Float) -> Unit): List<String> {
         val dir = DocumentFile.fromTreeUri(ctx, tree) ?: throw Exception("Can't open the folder")
         val done = mutableListOf<String>()
-        for (a in info.assets) {
+        for (a in info.assets.filter { it.name != "opgbc_fpga_min.bin" }) {     // System Update reads opgbc_fpga.bin
             dir.findFile(a.name)?.delete()
             val f = dir.createFile("application/octet-stream", a.name) ?: throw Exception("Can't create ${a.name}")
             // createFile may append ".bin" again for this MIME type: rename back if needed

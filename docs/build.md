@@ -51,6 +51,10 @@ Pass Verilog defines through `DEFS`, e.g. `DEFS="-D MENU_AT_BOOT -D VIDEO_720P" 
 | `DEBUG_SQUARES` | 32 status bits shown as squares at the top left of the HDMI picture. |
 | `HDMI_PATTERN` | Test pattern instead of the game picture. |
 | `NO_CORE` | Build without the Game Boy core (video/SDRAM bring-up). |
+| `MINIMAL` | The low-power bitstream (`opgbc_fpga_min.bin` in the releases): no HDMI and no PLL for it, no LEDs, link port, printer, Bluetooth, cartridge port or USB audio. Only the LCD, the speaker, the buttons and DualShock, SD and the USB remote stay. Place it with the constraints without the HDMI clocks: `DEFS="-D MINIMAL" PNR_OPTS="--pre-pack rtl/board/place.py --sdc rtl/board/clocks_min.sdc --vopt ioreg_in_iob" ./build.sh gbc_top`. |
+| `SCR_ENGINE` | Hardware encoder for the live screen (`rtl/sys/scr_engine.sv`). Does not fit next to the full design. |
+| `NO_CART_PORT` | Leaves out the cartridge flash / original-cartridge reader port. |
+| `HDMI_MIN_INFOFRAMES` | Only the AVI InfoFrame on HDMI (no SPD or audio InfoFrame). |
 
 ### Regenerating generated files
 

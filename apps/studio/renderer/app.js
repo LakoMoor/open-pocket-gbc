@@ -46,6 +46,8 @@ function renderInstall() {
     const r = release;
     const v = !r ? 'checking…' : r.error ? (r.error.includes('404') ? 'no release published yet' : r.error) : `${r.tag} · ${new Date(r.published).toLocaleDateString()}`;
     l.append(item('Install the latest release', v, () => start(() => S.installRelease()), true, !r || r.error || !(r.fw || r.fpga)));
+    l.append(item('Install Minimal (low power)', r && r.fpgaMin ? 'LCD, speaker, buttons; no HDMI, link port or LEDs' : 'not in this release',
+      () => start(() => S.installRelease('min')), false, !r || r.error || !r.fpgaMin || !r.fw));
     if (r && !r.error) {
       l.append(item('Firmware', r.fw ? kb(r.fw.size) : 'not in the release', null, false, true));
       l.append(item('FPGA bitstream', r.fpga ? kb(r.fpga.size) : 'not in the release', null, false, true));

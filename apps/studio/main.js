@@ -236,10 +236,15 @@ async function latestRelease() {
   const r = await getJSON(`https://api.github.com/repos/${REPO}/releases/latest`);
   const pick = n => r.assets.find(a => a.name === n);
   return { tag: r.tag_name, name: r.name, published: r.published_at,
-           fw: pick('opgbc_fw.bin'), fpga: pick('opgbc_fpga.bin') };
+           fw: pick('opgbc_fw.bin'), fpga: pick('opgbc_fpga.bin'), fpgaMin: pick('opgbc_fpga_min.bin') };
 }
-async function fetchRelease() {
+// variant 'min': the MINIMAL bitstream (LCD, speaker, buttons; no HDMI, link port or LEDs)
+async function fetchRelease(variant) {
   const r = await latestRelease();
+  if (variant === 'min') {
+    if (!r.fpgaMin) throw new Error('this release has no Minimal bitstream');
+    r.fpga = r.fpgaMin;
+  }
   fs.mkdirSync(CACHE, { recursive: true });
   const out = {};
   for (const [k, a] of [['firmware', r.fw], ['bitstream', r.fpga]]) {
@@ -443,9 +448,9 @@ ipcMain.handle('install-build', (_, which) => {
   install(items);
   return true;
 });
-ipcMain.handle('install-release', async () => {
+ipcMain.handle('install-release', async (_, variant) => {
   try {
-    const r = await fetchRelease();
+    const r = await fetchRelease(variant);
     const items = [];
     if (r.files.bitstream) items.push({ kind: 'bitstream', file: r.files.bitstream });
     if (r.files.firmware) items.push({ kind: 'firmware', file: r.files.firmware });

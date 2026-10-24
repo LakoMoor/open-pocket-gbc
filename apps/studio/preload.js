@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('studio', {
   status: () => ipcRenderer.invoke('status'),
   installBuild: which => ipcRenderer.invoke('install-build', which),
   install: items => ipcRenderer.invoke('install', items),
-  installRelease: () => ipcRenderer.invoke('install-release'),
+  installRelease: variant => ipcRenderer.invoke('install-release', variant),
   releaseInfo: () => ipcRenderer.invoke('release-info'),
   pick: kind => ipcRenderer.invoke('pick', kind),
   sd: (drive, source) => ipcRenderer.invoke('sd', drive, source),

@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.7.1"
+#define FW_VERSION      "1.8"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -101,7 +101,10 @@ static uint8_t preset_sel;              // Power > Preset: 0 normal, 1 battery, 
 static int preset_now(void);
 static void preset_apply(int battery_preset);
 
+static int hdmi_is_off(void) { return set.hdmi_off || (REG_ID & 8); }   // 8: MINIMAL bitstream
+
 static void apply_settings(void) {
+    int minimal = (REG_ID & 8) != 0;   // MINIMAL bitstream: no HDMI, the LCD is the screen (settings kept)
     uint32_t duty = bri_duty[set.lcd_bri & 3];
     if (lcd_dimmed) duty = 1;
     REG_CFG = (set.disp_mode & 3) | ((set.dmg_pal & 7) << 2) | ((set.gbc_raw & 1) << 5) |
@@ -110,8 +113,8 @@ static void apply_settings(void) {
               ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16) |
               ((uint32_t)(set.spk_boost & 3) << 17) | ((uint32_t)(set.spk_mode & 1) << 19);
     ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED | (3u << C_LED_SHIFT) | C_SDRAM_PD | C_LCD_SLOW | C_LINK | C_BT | C_PRN_VIRT);
-    ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off ? C_HDMI_OFF : 0) |
-            (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED | (uint32_t)((set.led_en - 1) & 3) << C_LED_SHIFT : 0) |
+    ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off || minimal ? C_HDMI_OFF : 0) |
+            (set.lcd_off && !minimal ? C_LCD_OFF : 0) | (set.led_en ? C_LED | (uint32_t)((set.led_en - 1) & 3) << C_LED_SHIFT : 0) |
             (set.sdram_pd ? C_SDRAM_PD : 0) | (set.lcd_slow ? C_LCD_SLOW : 0) | (set.link_en == 1 ? C_LINK : 0) | (set.link_en == 2 ? C_BT : 0) |
             (set.vprinter ? C_PRN_VIRT : 0);
     ctrl_write();
@@ -659,7 +662,7 @@ static uint32_t pix_rgb(uint16_t p, int gbc) {
 static int screenshot(char *saved_as, int n) {
     if (!sd_mounted) sd_mount();
     if (!sd_mounted || !game.loaded) return -1;
-    if (set.hdmi_off) {                 // no framebuffer writes while HDMI is off: run 3 frames with them
+    if (hdmi_is_off()) {                // no framebuffer writes while HDMI is off: run 3 frames with them
         uint32_t keep = ctrl;
         ctrl = (ctrl | C_FB_FORCE) & ~C_PAUSE;
         ctrl_write();
@@ -1177,7 +1180,7 @@ static void vprn_poll(uint32_t now) {
 // frame of the game is kept and put back. The LCD shows a hint: it only gets the core's picture.
 static void vprn_view(void) {
     if (!prn_last_rows) { message_screen("Nothing printed yet", "print from a game first"); wait_ms(1500); osd_invalidate(); return; }
-    if (set.hdmi_off) { message_screen("Turn HDMI on to view", "the BMP is in /Prints"); wait_ms(1800); osd_invalidate(); return; }
+    if (hdmi_is_off()) { message_screen("Turn HDMI on to view", "the BMP is in /Prints"); wait_ms(1800); osd_invalidate(); return; }
     uint32_t st = stat_read();
     int gbc = st & 1, buf = (st >> 3) & 3;
     uint32_t fb = 0x700000u + (uint32_t)buf * 0x10000, keep = 0x730000u;
@@ -1666,7 +1669,7 @@ static void scr_poll(void) {
     if (ms_now() - scr_rx_ms > 2000) { scr_stop(); return; }
     if (scr_on == 2) return;
     scr_audio();
-    if (set.hdmi_off && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
+    if (hdmi_is_off() && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
     uint32_t st = stat_read();
     int gbc = st & 1, buf = (st >> 3) & 3;
     uint16_t fr = (uint16_t)(st >> 16);

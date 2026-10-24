@@ -183,8 +183,13 @@ assign se_req = 1'b0; assign se_we = 1'b0; assign se_addr = 21'd0; assign se_wda
 assign se_busy = 1'b0; assign se_tx_valid = 1'b0; assign se_tx_byte = 8'd0;
 localparam IO_ENGINE = 16'h0000;
 `endif
-// REG_ID [15:0]: bit 0 base, bit 1 stream engine, bit 2 USB audio
+// REG_ID [15:0]: bit 0 base, bit 1 stream engine, bit 2 USB audio, bit 3 MINIMAL (no HDMI, link,
+// LEDs, cartridge port or USB audio)
+`ifdef MINIMAL
+localparam IO_VERSION = 16'h0009 | IO_ENGINE;
+`else
 localparam IO_VERSION = 16'h0005 | IO_ENGINE;
+`endif
 
 // ------------------------------------------------------------ USB audio
 // 48 kHz -> 16 kHz mono 8-bit samples into a 64-entry FIFO (4 ms) that the firmware empties
@@ -196,7 +201,11 @@ reg  [6:0] af_n;
 reg  [1:0] af_div;
 reg        af_on;
 wire       af_pop = fire && is_io && !is_wr && reg_a == 6'h1D && af_n != 0;
+`ifdef MINIMAL
+wire       af_push = 1'b0;
+`else
 wire       af_push = af_on && aud_smp && af_div == 2'd2 && af_n != 7'd64;
+`endif
 always @(posedge clk) begin
     if (aud_smp) af_div <= af_div == 2'd2 ? 2'd0 : af_div + 1'd1;
     if (af_push) begin af_mem[af_wp] <= aud_mono8; af_wp <= af_wp + 1'd1; end
@@ -223,6 +232,9 @@ spi_port #(.DIV0(8'd63)) u_sd (.clk(clk), .reset(reset), .valid(mem_valid & sel_
 spi_port #(.DIV0(8'd0)) u_fl (.clk(clk), .reset(reset), .valid(mem_valid & sel_fl), .sel(reg_a[1:0]),
     .wr(is_wr), .fire(fire & sel_fl), .wdata(mem_wdata), .ready(fl_ready), .rdata(fl_rdata),
     .cs_n(flash_cs_n), .sck(flash_clk), .mosi(flash_mosi), .miso(flash_miso));
+`ifdef MINIMAL
+`define NO_CART_PORT
+`endif
 `ifndef NO_CART_PORT
 spi_port #(.DIV0(8'd1)) u_ct (.clk(clk), .reset(reset), .valid(mem_valid & sel_ct), .sel(reg_a[1:0]),
     .wr(is_wr), .fire(fire & sel_ct), .wdata(mem_wdata), .ready(ct_ready), .rdata(ct_rdata),
