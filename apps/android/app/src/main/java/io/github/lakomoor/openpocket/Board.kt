@@ -215,8 +215,59 @@ object Board : SerialInputOutputManager.Listener {
         if (text.size() > 0) { onText(text.toByteArray()); text.reset() }
     }
 
+    // ---- board settings ('Z', firmware 1.6+): lines in lower case only, because upper case
+    // letters are remote key presses
+    data class Opt(val page: Int, val pageName: String, val item: Int, val value: Int, val label: String, val options: List<String>)
+    private val cfgPages = listOf("Display", "Audio", "Controls", "System", "Power")
+    @Volatile private var cfgTap: StringBuilder? = null
+
+    private fun cfgSession(lines: List<String>, until: Regex): List<String> {
+        if (port == null) error("no board on USB")
+        if (_live.value) { stopScreen(); Thread.sleep(800) }
+        val tap = StringBuilder()
+        cfgTap = tap
+        try {
+            val t0 = System.currentTimeMillis()
+            while (!synchronized(tap) { tap.contains("#CFG") }) {
+                if (System.currentTimeMillis() - t0 > 5000) error("the board did not answer: settings over USB need firmware 1.6 or newer")
+                write("Z"); Thread.sleep(300)
+            }
+            val out = ArrayList<String>()
+            for (l in lines) {
+                val start = synchronized(tap) { tap.length }
+                write(l + "\n")
+                val t1 = System.currentTimeMillis()
+                while (true) {
+                    val got = synchronized(tap) { tap.substring(start) }
+                    if (until.containsMatchIn(got)) { out.add(got); break }
+                    if (System.currentTimeMillis() - t1 > 5000) error("no answer from the board")
+                    Thread.sleep(20)
+                }
+            }
+            write("bye\n"); Thread.sleep(100)
+            return out
+        } finally { cfgTap = null }
+    }
+
+    /** The settings of the board's menu pages, or an error message. */
+    fun cfgList(): Pair<List<Opt>, String?> = try {
+        val t = cfgSession(listOf("list"), Regex("(?m)^end\\r?$"))[0]
+        val re = Regex("^opt (\\d+) (\\d+) (\\d+)\\|([^|]*)\\|(.*)$")
+        t.lines().map { it.trimEnd() }.mapNotNull { re.find(it) }.map { m ->
+            val (p, i, v, label, opts) = m.destructured
+            Opt(p.toInt(), cfgPages.getOrElse(p.toInt()) { "?" }, i.toInt(), v.toInt(), label, opts.split(';'))
+        } to null
+    } catch (e: Exception) { emptyList<Opt>() to (e.message ?: "error") }
+
+    /** Changes one setting like the menu does; null when the board took it. */
+    fun cfgSet(o: Opt, v: Int): String? = try {
+        val t = cfgSession(listOf("set ${o.page} ${o.item} $v"), Regex("(?m)^(ok|err)\\r?$"))[0]
+        if (Regex("(?m)^ok").containsMatchIn(t)) null else "the board refused the value"
+    } catch (e: Exception) { e.message ?: "error" }
+
     private fun onText(data: ByteArray) {
         val s = String(data, Charsets.ISO_8859_1)
+        cfgTap?.let { synchronized(it) { it.append(s) }; return }
         synchronized(rx) {
             rx.append(s)
             val d = dump

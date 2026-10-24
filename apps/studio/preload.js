@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('studio', {
   screen: on => ipcRenderer.invoke('screen', on),
   savePngs: files => ipcRenderer.invoke('save-pngs', files),
   saveVideo: bytes => ipcRenderer.invoke('save-video', bytes),
+  cfgList: () => ipcRenderer.invoke('cfg-list'),
+  cfgSet: (p, i, v) => ipcRenderer.invoke('cfg-set', p, i, v),
   rtlStop: () => ipcRenderer.invoke('rtl-stop'),
   on: (ch, fn) => ipcRenderer.on(ch, (_, d) => fn(d)),
 });

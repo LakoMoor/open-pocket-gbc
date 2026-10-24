@@ -112,11 +112,12 @@ fun App() {
                     0 -> RemoteScreen()
                     1 -> IdeScreen()
                     2 -> UpdateScreen()
+                    3 -> SettingsScreen()
                     else -> LogScreen()
                 }
             }
             Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf("Remote", "IDE", "Update", "Log").forEachIndexed { i, t ->
+                listOf("Remote", "IDE", "Update", "Settings", "Log").forEachIndexed { i, t ->
                     Text(t, color = if (tab == i) Color(0xFF111111) else Dim, fontWeight = if (tab == i) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier.clip(RoundedCornerShape(50)).background(if (tab == i) PillC else Color.Transparent)
                             .clickable { tab = i }.padding(horizontal = 16.dp, vertical = 9.dp))
@@ -379,6 +380,64 @@ fun UpdateScreen() {
 }
 
 // ---------------------------------------------------------------- log
+@Composable
+fun SettingsScreen() {
+    // the board's menu settings over USB (firmware 1.6+); a change is applied and stored at once
+    val scope = rememberCoroutineScope()
+    var opts by remember { mutableStateOf<List<Board.Opt>>(emptyList()) }
+    var note by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    fun load() {
+        busy = true; note = "reading…"
+        scope.launch {
+            val (o, err) = withContext(Dispatchers.IO) { Board.cfgList() }
+            opts = o; busy = false
+            note = err ?: "${o.size} settings"
+        }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+        Text("Settings", color = Text, fontSize = 44.sp, fontWeight = FontWeight.Medium, letterSpacing = (-2).sp)
+        Text("The board's menu settings over USB (firmware 1.6 or newer).", color = Dim, fontSize = 13.sp)
+        Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Pill(if (opts.isEmpty()) "Read from board" else "Refresh", primary = opts.isEmpty(), enabled = !busy) { load() }
+            Spacer(Modifier.width(12.dp))
+            Text(note, color = Dim, fontSize = 13.sp)
+        }
+        var page = -1
+        for (o in opts) {
+            if (o.page != page) {
+                page = o.page
+                Text(o.pageName.uppercase(), color = Dim, fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 18.dp, bottom = 4.dp))
+            }
+            var open by remember(o) { mutableStateOf(false) }
+            Row(Modifier.fillMaxWidth().clickable(enabled = !busy) { open = true }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(o.label, color = Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Box {
+                    Text(o.options.getOrElse(o.value) { "?" }, color = Accent, fontSize = 14.sp)
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        o.options.forEachIndexed { k, t ->
+                            DropdownMenuItem(text = { Text(t) }, onClick = {
+                                open = false; busy = true; note = "${o.label}: saving…"
+                                scope.launch {
+                                    val err = withContext(Dispatchers.IO) { Board.cfgSet(o, k) }
+                                    busy = false
+                                    note = err?.let { "${o.label}: $it" } ?: "${o.label}: $t"
+                                    if (err == null) {
+                                        if (o.label == "Preset") load()           // the preset changes the others
+                                        else opts = opts.map { if (it === o) it.copy(value = k) else it }
+                                    }
+                                }
+                            })
+                        }
+                    }
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
 @Composable
 fun LogScreen() {
     val log by Board.log.collectAsState()

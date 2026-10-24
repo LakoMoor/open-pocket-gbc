@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.5"
+#define FW_VERSION      "1.6"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -27,7 +27,7 @@ typedef struct {
     uint32_t magic;
     uint8_t  disp_mode, dmg_pal, gbc_raw, lcd_crop;
     uint8_t  dbg_on, lcd_bri, volume, swap_ab;
-    uint8_t  sys_mode, hdmi_off, lcd_off, led_en;
+    uint8_t  sys_mode, hdmi_off, lcd_off, led_en;      // led_en: 0 off, 1 status, 2 CPU clock, 3 sound, 4 activity
     uint8_t  autosave, toasts, boot_menu, sleep_min;
     uint8_t  last_src, last_flash, speaker, spk_boost;
     uint8_t  spk_mode, theme, sdram_pd, lcd_slow;      // theme: TH_*
@@ -109,9 +109,9 @@ static void apply_settings(void) {
               (duty << 8) | ((uint32_t)(set.volume & 7) << 12) |
               ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16) |
               ((uint32_t)(set.spk_boost & 3) << 17) | ((uint32_t)(set.spk_mode & 1) << 19);
-    ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED | C_SDRAM_PD | C_LCD_SLOW | C_LINK | C_PRN_VIRT);
+    ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED | (3u << C_LED_SHIFT) | C_SDRAM_PD | C_LCD_SLOW | C_LINK | C_PRN_VIRT);
     ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off ? C_HDMI_OFF : 0) |
-            (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED : 0) |
+            (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED | (uint32_t)((set.led_en - 1) & 3) << C_LED_SHIFT : 0) |
             (set.sdram_pd ? C_SDRAM_PD : 0) | (set.lcd_slow ? C_LCD_SLOW : 0) | (set.link_en ? C_LINK : 0) |
             (set.vprinter ? C_PRN_VIRT : 0);
     ctrl_write();
@@ -1618,6 +1618,7 @@ out:
     osd_invalidate();
 }
 
+static void cfg_uart(void);            // settings over the UART, with the menu code
 static uint32_t scr_pend;              // a byte read between rows, handled at the next poll
 
 static void scr_poll(void) {
@@ -1628,6 +1629,7 @@ static void scr_poll(void) {
         scr_rx_ms = ms_now();
         if ((c == 'V' || c == 'W') && !scr_on) { scr_start(c == 'W'); return; }
         if (c == 'Y' && !scr_on) { upd_uart(); return; }
+        if (c == 'Z' && !scr_on) { cfg_uart(); return; }
         else if (c == 'v' && scr_on) { scr_stop(); return; }
         else if (scr_on && c >= 0x88 && c < 0xA0) {   // 0x80 + divider: go quiet, then switch the rate
             wait_ms(2);                                   // the host resumes with a byte at the new rate
@@ -1877,6 +1879,7 @@ static const char *const o_fps[]   = { "60 fps", "30 fps" };
 static const char *const o_dim[]   = { "Off", "15 s", "30 s", "60 s" };
 static const char *const o_poll[]  = { "200 ms", "500 ms" };
 static const char *const o_spkmode[] = { "PWM 66 kHz", "Sigma-delta" };
+static const char *const o_leds[]  = { "Off", "Status", "CPU Clock", "Sound", "Activity" };
 static const char *const o_scene[] = { "Synthwave", "Space", "City", "Random" };
 static uint8_t ff_on;                   // fast forward toggled in the menu
 static int ch_sel, fl_sel, upd_sel;     // selected cheat, flash game, update file
@@ -2118,7 +2121,7 @@ static void build_page(void) {
         add_opt(G_DISPLAY, "LCD Frame Rate", "30 fps halves the SPI traffic to the LCD.", &set.lcd_slow, 2, o_fps);
         add_opt(G_POWER, "LCD Backlight", "The backlight is the largest consumer on the LCD.", &set.lcd_bri, 4, o_bri);
         add_opt(G_MOON, "LCD Auto-Dim", "Backlight almost off after this long without input.", &set.dim_idx, 4, o_dim);
-        add_opt(G_POWER, "Activity LEDs", "Board LEDs while loading and in the menu.", &set.led_en, 2, o_offon);
+        add_opt(G_POWER, "Board LEDs", "Status: loading and menu. CPU Clock: blinks with the Game Boy CPU clock. Sound: left / right level. Activity: saves and USB.", &set.led_en, 5, o_leds);
         add_opt(G_MOON, "Sleep Timer", "Sleep after this long without a button press.", &set.sleep_min, 4, o_sleep);
         add_opt(G_GEAR, "Menu CPU Polling", "How often the menu CPU wakes up while a game runs.", &set.poll_slow, 2, o_poll);
         break;
@@ -3081,6 +3084,79 @@ static int opt_changed(item_t *it) {
     apply_settings();
     if (page == P_POWER) go(P_POWER, 1);              // refresh the preset value
     return 1;
+}
+
+// ---------------------------------------------------------------- settings over the USB-UART
+// 'Z' (at 115200): the firmware answers "#CFG" and reads lines; only lower case and digits,
+// because upper case letters are remote key presses:
+//   list               every setting on the Display, Audio, Controls, System and Power pages:
+//                      "opt <page> <item> <value>|<label>|<option>;<option>;...", then "end"
+//   set <p> <i> <v>    change one as the menu does (then it is stored): "ok" or "err"
+//   bye                done (also after 3 s without a byte); "#CFG end"
+static const uint8_t cfg_pages[] = { P_DISPLAY, P_AUDIO, P_CONTROLS, P_SYSTEM, P_POWER };
+
+static int cfg_line(char *buf, int max) {
+    int n = 0;
+    uint32_t t0 = ms_now();
+    for (;;) {
+        uint32_t r = REG_UART;
+        if (r & 0x800) {
+            char c = (char)r;
+            t0 = ms_now();
+            if (c == '\n' || c == '\r') { if (n) { buf[n] = 0; return n; } }
+            else if (n < max - 1) buf[n++] = c;
+        } else if (ms_now() - t0 > 3000) return -1;
+    }
+}
+
+static int cfg_num(const char **p) {
+    while (**p == ' ') (*p)++;
+    if (**p < '0' || **p > '9') return -1;
+    int v = 0;
+    while (**p >= '0' && **p <= '9') v = v * 10 + *(*p)++ - '0';
+    return v;
+}
+
+static void cfg_uart(void) {
+    int keep_page = page, keep_cursor = cursor, keep_scroll = scroll, changed = 0;
+    char keep_title[sizeof page_title], line[64];
+    memcpy(keep_title, page_title, sizeof keep_title);
+    logf("#CFG\n");
+    while (cfg_line(line, sizeof line) > 0) {
+        if (!strcmp(line, "bye")) break;
+        if (!strcmp(line, "list")) {
+            for (int pi = 0; pi < (int)sizeof cfg_pages; pi++) {
+                page = cfg_pages[pi];
+                build_page();
+                for (int i = 0; i < nitems; i++) {
+                    item_t *it = &items[i];
+                    if (it->id != I_OPT) continue;
+                    logf("opt %d %d %d|%s|", pi, i, *it->val, it->label);
+                    for (int k = 0; k < it->nopt; k++) logf("%s%s", k ? ";" : "", it->opts[k]);
+                    logf("\n");
+                }
+            }
+            logf("end\n");
+        } else if (!strncmp(line, "set ", 4)) {
+            const char *q = line + 4;
+            int pi = cfg_num(&q), i = cfg_num(&q), v = cfg_num(&q), ok = 0;
+            if (pi >= 0 && pi < (int)sizeof cfg_pages && i >= 0 && v >= 0) {
+                page = cfg_pages[pi];
+                build_page();
+                if (i < nitems && items[i].id == I_OPT && v < items[i].nopt) {
+                    *items[i].val = (uint8_t)v;
+                    opt_changed(&items[i]);
+                    changed = ok = 1;
+                }
+            }
+            logf(ok ? "ok\n" : "err\n");
+        } else logf("err\n");
+    }
+    if (changed) settings_save();
+    page = keep_page; cursor = keep_cursor; scroll = keep_scroll;
+    memcpy(page_title, keep_title, sizeof page_title);
+    if (ctrl & C_OSD) { build_page(); osd_invalidate(); }
+    logf("#CFG end\n");
 }
 
 // returns 1 when the menu should close

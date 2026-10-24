@@ -626,7 +626,32 @@ hdmi #(
 TLVDS_TBUF u_obuf [3:0] (.I({tmds_clock, tmds}), .OEN({4{hdmi_off}}), .O({tmds_clk_p, tmds_d_p}), .OB({tmds_clk_n, tmds_d_n}));
 
 wire [2:0] gpio_out;
-wire [1:0] led_v = ~({menu_open & menu_dim, loading} & {2{led_en}});
+// LEDs (ctrl[9] on), ctrl[18:17] picks what they show:
+//   0 status: menu open / loading
+//   1 CPU clock: a binary counter of the Game Boy CPU's clock enables (about 1 and 0.5 Hz);
+//     it stops while the game is paused and runs faster in double speed and fast forward
+//   2 sound: left / right channel louder than 1/16 of full scale
+//   3 activity: cartridge RAM writes (saves) / bytes from the USB remote
+// Short events are held until the next ~31 ms tick so they can be seen.
+wire [1:0] led_mode = ctrl[18:17];
+reg [22:0] led_cpu;
+reg [19:0] led_div;
+reg  [1:0] led_snd, led_act;
+wire [14:0] led_mag_l = audio_l[15] ? ~audio_l[14:0] : audio_l[14:0];
+wire [14:0] led_mag_r = audio_r[15] ? ~audio_r[14:0] : audio_r[14:0];
+always @(posedge clk_sys) begin
+    if (speed ? ce_2x : ce) led_cpu <= led_cpu + 1'd1;
+    led_div <= led_div + 1'd1;
+    if (&led_div) begin led_snd <= 2'b00; led_act <= 2'b00; end
+    if (|led_mag_l[14:11]) led_snd[0] <= 1'b1;
+    if (|led_mag_r[14:11]) led_snd[1] <= 1'b1;
+    if (cram_wr)   led_act[0] <= 1'b1;
+    if (uart_seen) led_act[1] <= 1'b1;
+end
+wire [1:0] led_on = led_mode == 2'd0 ? {menu_open & menu_dim, loading}
+                  : led_mode == 2'd1 ? led_cpu[22:21]
+                  : led_mode == 2'd2 ? led_snd : led_act;
+wire [1:0] led_v = ~(led_on & {2{led_en}});
 // with I2C on, both pins are open drain (the carrier has the pull-ups)
 assign led[0] = gpio_out[2] ? (gpio_out[0] ? 1'b0 : 1'bz) : led_v[0];
 assign led[1] = gpio_out[2] ? (gpio_out[1] ? 1'b0 : 1'bz) : led_v[1];

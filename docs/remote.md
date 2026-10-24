@@ -64,6 +64,24 @@ python tools/uart_update.py opgbc_fpga.bin --fpga   # bitstream, then switch the
 2. The host sends `OPUP`, the target (0 firmware, 1 bitstream) and the u32 size. Then it sends the file in 4 KB blocks, each followed by its u16 byte sum. Each step gets one answer: `K` (accepted), `R` (send that block again) or `E` (given up).
 3. After the last `K` both sides go back to 115200. The firmware writes and verifies the flash like System Update and logs `#UPD ok` or `#UPD fail`.
 
+## Board settings over USB
+
+Studio (Settings) and the Android app (Settings) read and change the settings of the board's menu: the Display, Audio, Controls, System and Power pages, with the same names and choices as on the board. A change is applied and stored at once. Firmware 1.6 or newer.
+
+**Protocol (115200):**
+1. The host sends `Z` until the firmware answers `#CFG`.
+2. Then it sends lines, lower case and digits only, because upper-case letters are remote key presses:
+   - `list` returns one line per setting, then `end`. Each line is `opt <page> <item> <value>|<label>|<choice>;<choice>;...`.
+   - `set <page> <item> <value>` changes a setting the way the menu does, then stores it. The answer is `ok` or `err`.
+   - `bye` closes the session. It also closes after 3 s without a byte. The firmware answers `#CFG end`.
+
+**Board LEDs** (Power › Board LEDs, bitstream 1.6):
+- Off.
+- Status: menu open and loading.
+- CPU Clock: a binary counter driven by the Game Boy CPU's clock. It blinks at about 1 and 0.5 Hz, stops while paused and runs faster in double speed and fast forward.
+- Sound: left and right channel level.
+- Activity: save writes and USB remote bytes.
+
 ## tools/remote.py
 
 Requires `pip install pyserial`. The port is found automatically (VID 0403, PID 6010); use `--port COM6` to override.

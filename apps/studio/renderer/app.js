@@ -259,6 +259,33 @@ $('#liverec').onclick = () => {
   $('#liverec').textContent = '■ Stop'; $('#liverec').classList.add('on');
 };
 
+// ---------------------------------------------------------------- board settings
+async function cfgLoad() {
+  $('#cfgmsg').textContent = 'reading…';
+  const r = await S.cfgList();
+  if (r.error) { $('#cfgmsg').textContent = r.error; return; }
+  const box = $('#cfg'); box.innerHTML = '';
+  let page = -1;
+  for (const o of r.opts) {
+    if (o.page !== page) { page = o.page; const h = document.createElement('h3'); h.textContent = o.pageName; box.append(h); }
+    const row = document.createElement('div'); row.className = 'opt';
+    const lab = document.createElement('label'); lab.textContent = o.label;
+    const sel = document.createElement('select');
+    o.options.forEach((t, k) => { const op = document.createElement('option'); op.value = k; op.textContent = t; sel.append(op); });
+    sel.value = o.value;
+    sel.onchange = async () => {
+      sel.disabled = true; $('#cfgmsg').textContent = `${o.label}: saving…`;
+      const s = await S.cfgSet(o.page, o.item, +sel.value);
+      sel.disabled = false;
+      $('#cfgmsg').textContent = s.error ? `${o.label}: ${s.error}` : `${o.label}: ${o.options[+sel.value]}`;
+      if (o.label === 'Preset' && !s.error) cfgLoad();          // the preset changes the others
+    };
+    row.append(lab, sel); box.append(row);
+  }
+  $('#cfgmsg').textContent = `${r.opts.length} settings`;
+}
+$('#cfgread').onclick = cfgLoad;
+
 // ---------------------------------------------------------------- remote: buttons
 document.querySelectorAll('.k').forEach(b => {
   const k = b.dataset.k;

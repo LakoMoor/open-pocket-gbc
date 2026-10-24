@@ -126,6 +126,52 @@ async function uartUpdate(data, fpga, label, step, steps) {
   }
 }
 
+// ---------------------------------------------------------------- board settings ('Z', firmware 1.6+)
+// lines in lower case only: upper case letters are remote key presses
+async function cfgSession(lines, until) {
+  if (!(await connect())) throw new Error('no board on USB');
+  if (scrOn) { screen(false); await sleep(800); }
+  let text = '';
+  updRx = d => { text += d.toString('latin1'); };
+  try {
+    const t0 = Date.now();
+    while (!text.includes('#CFG')) {
+      if (Date.now() - t0 > 5000) throw new Error('the board did not answer: settings over USB need firmware 1.6 or newer');
+      port.write('Z'); await sleep(300);
+    }
+    text = text.slice(text.indexOf('#CFG') + 4);
+    const out = [];
+    for (const l of lines) {
+      const start = text.length;
+      port.write(l + '\n');
+      const t1 = Date.now();
+      while (!until.test(text.slice(start))) { if (Date.now() - t1 > 5000) throw new Error('no answer from the board'); await sleep(20); }
+      out.push(text.slice(start));
+    }
+    port.write('bye\n');
+    await sleep(100);
+    return out;
+  } finally { updRx = null; }
+}
+const CFG_PAGES = ['Display', 'Audio', 'Controls', 'System', 'Power'];
+ipcMain.handle('cfg-list', async () => {
+  try {
+    const [t] = await cfgSession(['list'], /^end\r?$/m);
+    const opts = [];
+    for (const l of t.split(/\r?\n/)) {
+      const m = l.match(/^opt (\d+) (\d+) (\d+)\|([^|]*)\|(.*)$/);
+      if (m) opts.push({ page: +m[1], pageName: CFG_PAGES[+m[1]] || '?', item: +m[2], value: +m[3], label: m[4], options: m[5].split(';') });
+    }
+    return { opts };
+  } catch (e) { return { error: e.message }; }
+});
+ipcMain.handle('cfg-set', async (_, p, i, v) => {
+  try {
+    const [t] = await cfgSession([`set ${p} ${i} ${v}`], /^(ok|err)\r?$/m);
+    return /^ok/m.test(t) ? {} : { error: 'the board refused the value' };
+  } catch (e) { return { error: e.message }; }
+});
+
 // items: [{kind: 'bitstream'|'firmware'|'games'|'sram', file}]
 let busy = false;
 async function install(items) {

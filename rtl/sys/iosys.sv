@@ -126,7 +126,11 @@ wire fire    = mem_valid & mem_ready;
 // While the screen stream engine runs (se_own) it has the port; the CPU waits on its next access.
 reg ram_wait_rd, ram_done;
 reg [31:0] ram_q;
+`ifdef SCR_ENGINE
 reg         se_own;
+`else
+wire        se_own = 1'b0;          // no engine: none of its glue logic is built
+`endif
 wire        se_req, se_we, se_busy, se_tx_valid;
 wire [20:0] se_addr;
 wire [31:0] se_wdata;
@@ -157,11 +161,11 @@ end
 // ------------------------------------------------------------ screen stream engine
 // write 0x6C: {fix row, framebuffer word address} starts it; read 0x6C waits until it is done;
 // write 0x70: word address of its hash table (256-word aligned)
+wire        se_tx_take = se_own & se_tx_valid & (u_n == 0);
+`ifdef SCR_ENGINE
 reg  [20:0] se_base, se_htab;
 reg   [7:0] se_fix;
 reg         se_start;
-wire        se_tx_take = se_own & se_tx_valid & (u_n == 0);
-`ifdef SCR_ENGINE
 scr_engine u_se (
     .clk(clk), .reset(reset), .start(se_start), .base(se_base), .htab(se_htab), .fix(se_fix),
     .busy(se_busy),
@@ -314,8 +318,10 @@ always @(posedge clk) begin
     if (frame_tick) frames <= frames + 1'd1;
 
     // UART (the stream engine loads bytes while it runs)
+`ifdef SCR_ENGINE
     se_start <= 0;
     if (se_own && !se_busy && !se_start) se_own <= 0;
+`endif
     if (se_tx_take) begin u_sh <= {1'b1, se_tx_byte, 1'b0}; u_n <= 4'd10; u_cnt <= uart_div - 1'd1; end
     if (u_n != 0) begin
         if (u_cnt == 0) begin
@@ -338,8 +344,10 @@ always @(posedge clk) begin
             6'h18: prn_tx <= mem_wdata[7:0];
             6'h19: gpio_out <= mem_wdata[2:0];
             6'h1A: uart_div <= mem_wdata[11:0];
+`ifdef SCR_ENGINE
             6'h1B: begin se_base <= mem_wdata[20:0]; se_fix <= mem_wdata[31:24]; se_start <= 1; se_own <= 1; end
             6'h1C: se_htab <= mem_wdata[20:0];
+`endif
             default: ;
         endcase else case (reg_a)
             6'h03: begin dirty <= 0; remote <= 0; end
@@ -366,7 +374,10 @@ always @(posedge clk) begin
         ctrl   <= 32'h0000_0001;          // core held in reset until a game is loaded
         cfg    <= 32'h0000_0000;
         u_n    <= 0; u_sh <= 10'h3FF;
-        uart_div <= UDIV[11:0]; rx_new <= 0; se_own <= 0; se_start <= 0;
+        uart_div <= UDIV[11:0]; rx_new <= 0;
+`ifdef SCR_ENGINE
+        se_own <= 0; se_start <= 0;
+`endif
         ev     <= 0; dirty <= 0;
         ms     <= 0; ms_div <= 0; wait_cnt <= 0;
     end

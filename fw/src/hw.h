@@ -71,6 +71,7 @@
 #define C_LINK      (1u << 14)  // link port pins active
 #define C_PRINTER   (1u << 15)  // link port is a Game Boy Printer (REG_PRN), the core is cut off
 #define C_PRN_VIRT  (1u << 16)  // virtual printer: the core's serial port talks to REG_PRN
+#define C_LED_SHIFT 17          // [18:17] what the LEDs show: status, CPU clock, sound, activity
 
 // SDRAM layout (byte addresses, the CPU sees SDRAM at 0)
 #define ROM_BASE    0x000000u
