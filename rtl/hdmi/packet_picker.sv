@@ -24,10 +24,13 @@ module packet_picker
     output logic [55:0] sub [3:0]
 );
 
-// Connect the current packet type's data to the output.
-logic [7:0] packet_type = 8'd0;
-logic [23:0] headers [255:0];
-logic [55:0] subs [255:0] [3:0];
+// Connect the current packet's data to the output. The packet is picked by a small index
+// (0 null, 1 audio clock regeneration, 2 audio sample, 3 AVI, 4 SPD, 5 audio InfoFrame) instead
+// of its 8-bit HDMI type: a 256-entry array cost ~600 logic cells on the GW2AR-18. The headers
+// carry the real types.
+logic [2:0] packet_type = 3'd0;
+logic [23:0] headers [5:0];
+logic [55:0] subs [5:0] [3:0];
 assign header = headers[packet_type];
 assign sub[0] = subs[packet_type][0];
 assign sub[1] = subs[packet_type][1];
@@ -125,7 +128,7 @@ begin
     begin
         frame_counter <= 8'd0;
     end
-    else if (packet_pixel_counter == 5'd31 && packet_type == 8'h02) // Keep track of current IEC 60958 frame
+    else if (packet_pixel_counter == 5'd31 && packet_type == 3'd2) // Keep track of current IEC 60958 frame
     begin
         if (frame_counter + 8'd4 >= 8'd192)
             frame_counter <= frame_counter + 8'd4 - 8'd192;
@@ -139,16 +142,28 @@ audio_sample_packet #(.SAMPLING_FREQUENCY(SAMPLING_FREQUENCY), .WORD_LENGTH({{WO
 auxiliary_video_information_info_frame #(
     .VIDEO_ID_CODE(7'(VIDEO_ID_CODE)),
     .IT_CONTENT(IT_CONTENT)
-) auxiliary_video_information_info_frame(.header(headers[130]), .sub(subs[130]));
+) auxiliary_video_information_info_frame(.header(headers[3]), .sub(subs[3]));
 
 
-source_product_description_info_frame #(.VENDOR_NAME(VENDOR_NAME), .PRODUCT_DESCRIPTION(PRODUCT_DESCRIPTION), .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION)) source_product_description_info_frame(.header(headers[131]), .sub(subs[131]));
+`ifndef HDMI_MIN_INFOFRAMES
+source_product_description_info_frame #(.VENDOR_NAME(VENDOR_NAME), .PRODUCT_DESCRIPTION(PRODUCT_DESCRIPTION), .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION)) source_product_description_info_frame(.header(headers[4]), .sub(subs[4]));
 
 
-audio_info_frame audio_info_frame(.header(headers[132]), .sub(subs[132]));
+audio_info_frame audio_info_frame(.header(headers[5]), .sub(subs[5]));
+`else
+// HDMI_MIN_INFOFRAMES: only the AVI InfoFrame (room for the screen stream engine on the GW2AR-18);
+// the SPD and audio InfoFrames are optional for most sinks
+assign headers[4] = headers[0]; assign subs[4] = subs[0];
+assign headers[5] = headers[0]; assign subs[5] = subs[0];
+`endif
 
 
 // "A Source shall always transmit... [an InfoFrame] at least once per two Video Fields"
+`ifdef HDMI_MIN_INFOFRAMES
+localparam bit SKIP_OPT = 1'b1;
+`else
+localparam bit SKIP_OPT = 1'b0;
+`endif
 logic audio_info_frame_sent = 1'b0;
 logic auxiliary_video_information_info_frame_sent = 1'b0;
 logic source_product_description_info_frame_sent = 1'b0;
@@ -160,42 +175,42 @@ begin
 
     if (reset || video_field_end)
     begin
-        audio_info_frame_sent <= 1'b0;
+        audio_info_frame_sent <= SKIP_OPT;
         auxiliary_video_information_info_frame_sent <= 1'b0;
-        source_product_description_info_frame_sent <= 1'b0;
-        packet_type <= 8'dx;
+        source_product_description_info_frame_sent <= SKIP_OPT;
+        packet_type <= 3'd0;
     end
     else if (packet_enable)
     begin
         if (last_clk_audio_counter_wrap ^ clk_audio_counter_wrap)
         begin
-            packet_type <= 8'd1;
+            packet_type <= 3'd1;
             last_clk_audio_counter_wrap <= clk_audio_counter_wrap;
         end
         else if (sample_buffer_ready)
         begin
-            packet_type <= 8'd2;
+            packet_type <= 3'd2;
             audio_sample_word_packet <= audio_sample_word_buffer[!sample_buffer_current];
             audio_sample_word_present_packet <= 4'b1111;
             sample_buffer_used <= 1'b1;
         end
         else if (!audio_info_frame_sent)
         begin
-            packet_type <= 8'h84;
+            packet_type <= 3'd5;
             audio_info_frame_sent <= 1'b1;
         end
         else if (!auxiliary_video_information_info_frame_sent)
         begin
-            packet_type <= 8'h82;
+            packet_type <= 3'd3;
             auxiliary_video_information_info_frame_sent <= 1'b1;
         end
         else if (!source_product_description_info_frame_sent)
         begin
-            packet_type <= 8'h83;
+            packet_type <= 3'd4;
             source_product_description_info_frame_sent <= 1'b1;
         end
         else
-            packet_type <= 8'd0;
+            packet_type <= 3'd0;
     end
 end
 
