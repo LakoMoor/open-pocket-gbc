@@ -158,12 +158,25 @@ function liveRgb(v) {
   if (live.raw) return ((r5 << 3 | r5 >> 2) << 16) | ((g5 << 3 | g5 >> 2) << 8) | (b5 << 3 | b5 >> 2);
   return Math.min(255, (r5 * 26 + g5 * 4 + b5 * 2) >> 2) << 16 | Math.min(255, (g5 * 24 + b5 * 8) >> 2) << 8 | Math.min(255, (r5 * 6 + g5 * 4 + b5 * 22) >> 2);
 }
+// 'A': 16 kHz mono unsigned 8-bit samples; queued back to back with ~80 ms of slack for jitter
+let actx = null, aNext = 0;
+function liveAudio(p) {
+  if (!$('#livesnd').checked || !p.length) return;
+  if (!actx) { actx = new AudioContext({ sampleRate: 16000 }); aNext = 0; }
+  const buf = actx.createBuffer(1, p.length, 16000), ch = buf.getChannelData(0);
+  for (let i = 0; i < p.length; i++) ch[i] = (p[i] - 128) / 128;
+  const src = actx.createBufferSource(); src.buffer = buf; src.connect(actx.destination);
+  const now = actx.currentTime;
+  if (aNext < now + 0.03 || aNext > now + 0.4) aNext = now + 0.08;      // underrun or drift: restart the queue
+  src.start(aNext); aNext += p.length / 16000;
+}
 function liveCells(p, dst) { for (let i = 0; i < dst.length && 2 + i * 2 < p.length; i++) dst[i] = p[1 + i * 2] | p[2 + i * 2] << 8; }
 S.on('scr', list => {
   for (const [t, p] of list) {
     if (t === 80) { live.gbc = p[0]; live.raw = p[1]; for (let i = 0; i < 4; i++) live.dmg[i] = p[2 + i * 3] << 16 | p[3 + i * 3] << 8 | p[4 + i * 3]; }
     else if (t === 79) { live.osdFlags = p[0]; liveCells(p, live.osd); }
     else if (t === 76) liveCells(p, live.lcd);
+    else if (t === 65) liveAudio(p);
     else if (t === 71) {
       const y = p[0], b = y * 160; let k = 1, x = 0;
       while (k < p.length && x < 160) {
@@ -229,7 +242,7 @@ $('#auto').onchange = async e => {
   const ok = await S.screen(e.target.checked);
   if (!ok) { e.target.checked = false; log('(no board on USB)\n'); return; }
   $('#livefps').textContent = e.target.checked ? 'waiting for the picture (bitstream 1.3, firmware 1.3 or newer)…' : '';
-  $('#liveshot').hidden = $('#liverec').hidden = !e.target.checked;
+  $('#liveshot').hidden = $('#liverec').hidden = $('#livesndl').hidden = !e.target.checked;
   if (!e.target.checked && rec) rec.stop();
 };
 // the game 3x and the HDMI picture with the menu, as PNG files

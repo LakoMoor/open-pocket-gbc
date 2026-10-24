@@ -153,6 +153,7 @@ private fun renderCells(font: IntArray, rows: List<String>, cols: Int, w: Int, h
 @Composable
 fun RemoteScreen() {
     val ctx = LocalContext.current
+    val state by Board.state.collectAsState()
     val scope = rememberCoroutineScope()
     val font = remember { ctx.assets.open("font8x8.hex").bufferedReader().readLines().filter { it.isNotBlank() }.map { it.trim().toInt(16) }.toIntArray() }
     var lcd by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -205,6 +206,13 @@ fun RemoteScreen() {
             Switch(checked = auto, onCheckedChange = { auto = it })
             Spacer(Modifier.width(6.dp))
             Text("live", color = Dim, fontSize = 13.sp)
+            if (live) {
+                Spacer(Modifier.width(10.dp))
+                var snd by remember { mutableStateOf(LiveAudio.enabled) }
+                Switch(checked = snd, onCheckedChange = { snd = it; LiveAudio.enabled = it; if (!it) LiveAudio.stop() })
+                Spacer(Modifier.width(6.dp))
+                Text("sound", color = Dim, fontSize = 13.sp)
+            }
             if (live && liveHdmi != null) {
                 Spacer(Modifier.width(12.dp))
                 Pill("Full screen") { full = true }
@@ -215,6 +223,7 @@ fun RemoteScreen() {
             }
         }
         if (note.isNotEmpty()) Text(note, color = Dim, fontSize = 13.sp)
+        if (state != Board.State.Connected) BluetoothPicker()
         Spacer(Modifier.height(18.dp))
         // the pad
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -276,6 +285,40 @@ private fun FullPlay(img: ImageBitmap?, tick: Int, exit: () -> Unit) {
         }
         Box(a.align(Alignment.TopEnd).padding(12.dp).size(44.dp).clip(RoundedCornerShape(50)).background(Panel2)
             .clickable(onClick = exit), contentAlignment = Alignment.Center) { Text("✕", color = Text, fontSize = 18.sp) }
+    }
+}
+
+// a ZS-040 / HC-05 on the link pins (Menu › Controls › Link Port › Bluetooth): pick a paired module
+@android.annotation.SuppressLint("MissingPermission")
+@Composable
+private fun BluetoothPicker() {
+    val ctx = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    var devs by remember { mutableStateOf<List<android.bluetooth.BluetoothDevice>>(emptyList()) }
+    var msg by remember { mutableStateOf("") }
+    fun list() {
+        val ad = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter
+        if (ad == null || !ad.isEnabled) { msg = "Bluetooth is off"; return }
+        devs = ad.bondedDevices.toList().sortedBy { it.name ?: "" }
+        msg = if (devs.isEmpty()) "Pair the module first in the phone's Bluetooth settings (PIN 1234 or 0000)" else ""
+        open = devs.isNotEmpty()
+    }
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) list() else msg = "Bluetooth permission denied" }
+    Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box {
+            Pill("Connect over Bluetooth") {
+                if (Build.VERSION.SDK_INT >= 31 && ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    perm.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                else list()
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                devs.forEach { dv ->
+                    DropdownMenuItem(text = { Text(dv.name ?: dv.address) }, onClick = { open = false; msg = "connecting…"; Board.connectBluetooth(dv) })
+                }
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(msg, color = Dim, fontSize = 12.sp)
     }
 }
 

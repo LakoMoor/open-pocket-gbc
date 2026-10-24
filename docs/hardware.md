@@ -130,6 +130,25 @@ Most cables leave pins 1 and 4 unwired.
 
 **What to play.** Trading and battles (Pokémon), Tetris and F-1 Race two-player and Printer games all work. Both consoles must run compatible games, as with two real Game Boys.
 
+### Bluetooth module (ZS-040 / HC-05 / HC-06)
+
+The link-port pins can carry a Bluetooth serial module instead of the cable: Menu › Controls › Link Port › Bluetooth (bitstream 1.7). The Android app then connects without a USB cable: remote buttons, settings, the log and a slow live screen.
+
+| Module | Tang Nano 20K |
+|---|---|
+| VCC | 5 V |
+| GND | GND |
+| TXD | pin 42 (link SI) |
+| RXD | pin 56 (link SO) |
+
+- The ZS-040 board has a 3.3 V regulator and 3.3 V logic, so no level shifter is needed.
+- Set the module to 115200 baud once:
+  - HC-05: hold the button while powering up, then send `AT+UART=115200,0,0`.
+  - HC-06: send `AT+BAUD8`.
+- Pair it in the phone's Bluetooth settings (PIN 1234 or 0000), then in the app: Remote › Connect over Bluetooth.
+- **Speed:** the module stays at 115200. The live screen over Bluetooth is about 1 frame per second and has no sound. Over USB it is about 6 fps, with sound. Installing firmware still needs USB.
+- The Game Boy link cable and the printer can't be used while Bluetooth is on: they share the pins.
+
 ### Carrier board extras (Menu button, USB power, battery gauge)
 
 Optional; a bare Tang Nano runs without them.

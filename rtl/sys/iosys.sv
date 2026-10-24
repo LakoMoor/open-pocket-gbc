@@ -58,6 +58,8 @@ module iosys #(
     input       [1:0] stat_buf,
     input             uart_seen,    // a byte came over the USB-UART (remote control)
     input       [7:0] uart_byte,    // ... and which one (for the screen stream handshake)
+    input             aud_smp,      // 48 kHz strobe
+    input       [7:0] aud_mono8,    // mono sample (unsigned) for the USB audio stream
     output reg [11:0] uart_div,     // UART bit time in clocks, TX and RX (115200 by default)
     input       [2:0] gpio_in,      // {charger, sda, scl}
     output reg  [2:0] gpio_out,     // {i2c on, sda low, scl low}     // framebuffer the display reads (the newest complete frame)
@@ -173,14 +175,36 @@ scr_engine u_se (
     .ack(rv_ack & se_own), .rdata(rv_rdata), .rvalid(rv_rvalid & se_own),
     .tx_valid(se_tx_valid), .tx_byte(se_tx_byte), .tx_take(se_tx_take)
 );
-localparam IO_VERSION = 16'h0002;
+localparam IO_ENGINE = 16'h0002;
 `else
 // The engine does not fit next to the core on the GW2AR-18 (88% LUT, no placement): the firmware
 // encodes the rows itself. Build with DEFS="-D SCR_ENGINE" to include it.
 assign se_req = 1'b0; assign se_we = 1'b0; assign se_addr = 21'd0; assign se_wdata = 32'd0;
 assign se_busy = 1'b0; assign se_tx_valid = 1'b0; assign se_tx_byte = 8'd0;
-localparam IO_VERSION = 16'h0001;
+localparam IO_ENGINE = 16'h0000;
 `endif
+// REG_ID [15:0]: bit 0 base, bit 1 stream engine, bit 2 USB audio
+localparam IO_VERSION = 16'h0005 | IO_ENGINE;
+
+// ------------------------------------------------------------ USB audio
+// 48 kHz -> 16 kHz mono 8-bit samples into a 64-entry FIFO (4 ms) that the firmware empties
+// into the screen stream. write 0x74: [0] on (and clear); read 0x74: [14:8] samples waiting,
+// [7:0] the oldest one (the read takes it)
+reg  [7:0] af_mem [0:63];
+reg  [5:0] af_wp, af_rp;
+reg  [6:0] af_n;
+reg  [1:0] af_div;
+reg        af_on;
+wire       af_pop = fire && is_io && !is_wr && reg_a == 6'h1D && af_n != 0;
+wire       af_push = af_on && aud_smp && af_div == 2'd2 && af_n != 7'd64;
+always @(posedge clk) begin
+    if (aud_smp) af_div <= af_div == 2'd2 ? 2'd0 : af_div + 1'd1;
+    if (af_push) begin af_mem[af_wp] <= aud_mono8; af_wp <= af_wp + 1'd1; end
+    if (af_pop) af_rp <= af_rp + 1'd1;
+    af_n <= af_n + (af_push ? 7'd1 : 7'd0) - (af_pop ? 7'd1 : 7'd0);
+    if (fire && is_io && is_wr && reg_a == 6'h1D) begin af_on <= mem_wdata[0]; af_wp <= 0; af_rp <= 0; af_n <= 0; end
+    if (reset) begin af_on <= 0; af_wp <= 0; af_rp <= 0; af_n <= 0; end
+end
 
 // ------------------------------------------------------------ boot ROM
 `include "bootrom.vh"
@@ -199,9 +223,16 @@ spi_port #(.DIV0(8'd63)) u_sd (.clk(clk), .reset(reset), .valid(mem_valid & sel_
 spi_port #(.DIV0(8'd0)) u_fl (.clk(clk), .reset(reset), .valid(mem_valid & sel_fl), .sel(reg_a[1:0]),
     .wr(is_wr), .fire(fire & sel_fl), .wdata(mem_wdata), .ready(fl_ready), .rdata(fl_rdata),
     .cs_n(flash_cs_n), .sck(flash_clk), .mosi(flash_mosi), .miso(flash_miso));
+`ifndef NO_CART_PORT
 spi_port #(.DIV0(8'd1)) u_ct (.clk(clk), .reset(reset), .valid(mem_valid & sel_ct), .sel(reg_a[1:0]),
     .wr(is_wr), .fire(fire & sel_ct), .wdata(mem_wdata), .ready(ct_ready), .rdata(ct_rdata),
     .cs_n(cart_cs_n), .sck(cart_clk), .mosi(cart_mosi), .miso(cart_miso));
+`else
+// NO_CART_PORT (the lite bitstream): no cartridge flash / original cartridge reader; the
+// firmware sees no flash there (reads 0xFF)
+assign ct_ready = 1'b1; assign ct_rdata = 32'hFFFF_FFFF;
+assign cart_cs_n = 1'b1; assign cart_clk = 1'b0; assign cart_mosi = 1'b0;
+`endif
 
 // ------------------------------------------------------------ UART TX (115200 8N1)
 localparam UDIV = CLK_HZ / 115200;
@@ -258,6 +289,7 @@ always @* begin
             6'h19: mem_rdata = {29'd0, gpio_in};
             6'h1A: mem_rdata = {20'd0, rx_new, 3'd0, rx_byte};
             6'h1B: mem_ready = ~se_own;
+            6'h1D: mem_rdata = {17'd0, af_n, af_mem[af_rp]};
             6'h0C: mem_ready = ~u_busy;
             6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout; mem_rdata = {31'd0, ev}; end
             6'h0E: mem_rdata = ctrl;

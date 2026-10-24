@@ -147,16 +147,19 @@ wire [11:0] pad_gpio = {3'b000, key_q[4], key_q[3], key_q[2], key_q[1], key_q[0]
 wire [11:0] pad_uart;
 wire        uart_menu, uart_reset, uart_seen;
 wire  [7:0] uart_byte;
+wire [31:0] ctrl, cfg;
+wire        bt_en = ctrl[19];       // ZS-040 / HC-05 Bluetooth serial module on the link pins: 42 RX, 56 TX
+wire        aud_smp;                // 48 kHz strobe and the mono sample, for the USB stream
+wire  [7:0] aud_mono8;
 wire [11:0] uart_div;              // UART bit time, set by the firmware (fast for the screen stream)
 wire  [1:0] fb_newest;             // last complete framebuffer (iosys STAT, from fb_writer)
 uart_pad #(.CLK_HZ(33_750_000)) u_uart_pad (
-    .clk(clk_sys), .reset(sys_rst), .rx(uart_rx), .div(uart_div),
+    .clk(clk_sys), .reset(sys_rst), .rx(uart_rx & (bt_en ? link_si : 1'b1)), .div(uart_div),
     .pad(pad_uart), .key_menu(uart_menu), .key_reset(uart_reset), .rx_seen(uart_seen), .rx_byte(uart_byte)
 );
 wire [11:0] pad_ok   = pad_ds | pad_gpio | pad_uart;
 
 // ================================================================ I/O CPU (menu, loader, saves)
-wire [31:0] ctrl, cfg;
 wire        ioctl_wr;
 wire [24:0] ioctl_addr;
 wire [15:0] ioctl_dout;
@@ -200,7 +203,7 @@ iosys #(.CLK_HZ(33_750_000)) u_io (
     .link_sc(prn_sc_in), .link_si(prn_si_in), .prn_so(prn_so),
     .inputs({uart_reset, uart_menu, s2_s[1], s1_s[1], pad_arm}),
     .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .stat_buf(fb_newest),
-    .uart_seen(uart_seen), .uart_byte(uart_byte), .uart_div(uart_div), .gpio_in({chg, led[1], led[0]}), .gpio_out(gpio_out), .cram_wr(cram_wr & ~gb_reset),
+    .uart_seen(uart_seen), .uart_byte(uart_byte), .aud_smp(aud_smp), .aud_mono8(aud_mono8), .uart_div(uart_div), .gpio_in({chg, led[1], led[0]}), .gpio_out(gpio_out), .cram_wr(cram_wr & ~gb_reset),
     .ctrl(ctrl), .cfg(cfg), .beep(beep),
     .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
     .osd_we(osd_we), .osd_addr(osd_waddr), .osd_data(osd_wdata),
@@ -470,7 +473,7 @@ wire       ser_din    = prn_virt ? prn_so : core_link ? lk_si_s[1] : 1'b1;
 wire       prn_sc_in  = prn_virt ? (ser_int ? ser_clk_out : 1'b1) : link_sc;
 wire       prn_si_in  = prn_virt ? ser_dout : link_si;
 assign link_sc = (core_link & ser_int) ? ser_clk_out : 1'bz;
-assign link_so = prn_mode ? prn_so : core_link ? ser_dout : 1'b1;
+assign link_so = bt_en ? uart_tx : prn_mode ? prn_so : core_link ? ser_dout : 1'b1;
 
 // ================================================================ audio
 wire        clk_audio;
@@ -478,7 +481,7 @@ wire [15:0] aud_gl, aud_gr;
 audio_out u_audio (
     .clk(clk_sys), .ce(ce), .mute(gb_reset | paused),
     .in_l(audio_l), .in_r(audio_r), .volume(volume),
-    .clk_audio(clk_audio), .out_l(aud_gl), .out_r(aud_gr)
+    .clk_audio(clk_audio), .out_l(aud_gl), .out_r(aud_gr), .smp(aud_smp), .mono8(aud_mono8)
 );
 // menu sounds: a short square wave from the firmware (beep register), scaled by the volume
 reg  [7:0] bp_div;                              // 4 us steps at 33.75 MHz (135 clocks)

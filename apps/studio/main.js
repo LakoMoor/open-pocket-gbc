@@ -351,7 +351,7 @@ function onBinary(d) {
       case 1: pk.type = v; pk.st = v === 82 ? 10 : v === 77 ? 20 : 2; break;
       case 2: pk.len = v; pk.st = 3; break;
       case 3: pk.len |= v << 8; pk.pos = 0; pk.buf = new Uint8Array(pk.len); pk.st = pk.len ? 4 : 0; if (!pk.len) scrPk.push([pk.type, pk.buf]); break;
-      case 4: pk.buf[pk.pos++] = v; if (pk.pos === pk.len) { scrPk.push([pk.type, pk.buf]); pk.st = 0; if (pk.type === 70) { send('scr', scrPk); scrPk = []; } } break;
+      case 4: pk.buf[pk.pos++] = v; if (pk.pos === pk.len) { scrPk.push([pk.type, pk.buf]); pk.st = 0; if (pk.type === 70 || pk.type === 65) { send('scr', scrPk); scrPk = []; } } break;
       // 'R': y, then PackBits over the row's 80 words (c < 128: c + 1 literal words, else c - 126
       // copies of one word), handed on as a 'G' row of two literal runs (128 + 32 pixels)
       case 10: pk.y = v; pk.w = new Uint32Array(80); pk.n = 0; pk.st = 11; break;

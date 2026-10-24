@@ -10,6 +10,30 @@ import kotlinx.coroutines.flow.asStateFlow
  * decodes the packets and composes what the HDMI output shows (game 3x in 720 x 480 with the OSD
  * on top) and what the LCD shows.
  */
+/** The board's audio in the live stream: 'A' packets, 16 kHz mono unsigned 8-bit (firmware 1.7). */
+object LiveAudio {
+    @Volatile var enabled = true
+    private var track: android.media.AudioTrack? = null
+
+    fun play(p: ByteArray, n: Int) {
+        if (!enabled || n <= 0) return
+        val t = track ?: try {
+            val fmt = android.media.AudioFormat.Builder().setSampleRate(16000)
+                .setEncoding(android.media.AudioFormat.ENCODING_PCM_8BIT)
+                .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build()
+            val min = android.media.AudioTrack.getMinBufferSize(16000, android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_8BIT)
+            android.media.AudioTrack.Builder().setAudioFormat(fmt).setBufferSizeInBytes(maxOf(min, 4096))
+                .setTransferMode(android.media.AudioTrack.MODE_STREAM).build().also { it.play(); track = it }
+        } catch (_: Exception) { return }
+        t.write(p, 0, n, android.media.AudioTrack.WRITE_NON_BLOCKING)
+    }
+
+    fun stop() {
+        try { track?.stop(); track?.release() } catch (_: Exception) {}
+        track = null
+    }
+}
+
 object LiveScreen {
     private val fb = ShortArray(160 * 144)
     private val osd = ShortArray(42 * 24)
@@ -38,6 +62,7 @@ object LiveScreen {
             'O' -> { osdFlags = p[0].toInt(); if (n >= 1 + osd.size * 2) cells(p, osd); _frame.value++ }
             'L' -> { lcdFlags = p[0].toInt(); if (n >= 1 + lcd.size * 2) cells(p, lcd); _frame.value++ }
             'G' -> row(p, n)
+            'A' -> LiveAudio.play(p, n)
             'F' -> {
                 _frame.value++
                 fpsN++

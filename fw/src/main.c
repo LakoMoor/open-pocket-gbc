@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.6"
+#define FW_VERSION      "1.7"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -31,7 +31,7 @@ typedef struct {
     uint8_t  autosave, toasts, boot_menu, sleep_min;
     uint8_t  last_src, last_flash, speaker, spk_boost;
     uint8_t  spk_mode, theme, sdram_pd, lcd_slow;      // theme: TH_*
-    uint8_t  dim_idx, poll_slow, menu_snd, link_en;    // LCD auto-dim: off / 15 / 30 / 60 s
+    uint8_t  dim_idx, poll_slow, menu_snd, link_en;    // LCD auto-dim: off / 15 / 30 / 60 s; link_en: 0 off, 1 Game Boy, 2 Bluetooth
     char     last_path[216];
     uint8_t  home_scene, vprinter, rsv2[14];
     uint32_t sum;
@@ -109,10 +109,10 @@ static void apply_settings(void) {
               (duty << 8) | ((uint32_t)(set.volume & 7) << 12) |
               ((uint32_t)(set.swap_ab & 1) << 15) | ((uint32_t)(set.speaker & 1) << 16) |
               ((uint32_t)(set.spk_boost & 3) << 17) | ((uint32_t)(set.spk_mode & 1) << 19);
-    ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED | (3u << C_LED_SHIFT) | C_SDRAM_PD | C_LCD_SLOW | C_LINK | C_PRN_VIRT);
+    ctrl &= ~((3u << C_SYS_SHIFT) | C_HDMI_OFF | C_LCD_OFF | C_LED | (3u << C_LED_SHIFT) | C_SDRAM_PD | C_LCD_SLOW | C_LINK | C_BT | C_PRN_VIRT);
     ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off ? C_HDMI_OFF : 0) |
             (set.lcd_off ? C_LCD_OFF : 0) | (set.led_en ? C_LED | (uint32_t)((set.led_en - 1) & 3) << C_LED_SHIFT : 0) |
-            (set.sdram_pd ? C_SDRAM_PD : 0) | (set.lcd_slow ? C_LCD_SLOW : 0) | (set.link_en ? C_LINK : 0) |
+            (set.sdram_pd ? C_SDRAM_PD : 0) | (set.lcd_slow ? C_LCD_SLOW : 0) | (set.link_en == 1 ? C_LINK : 0) | (set.link_en == 2 ? C_BT : 0) |
             (set.vprinter ? C_PRN_VIRT : 0);
     ctrl_write();
 }
@@ -1431,6 +1431,7 @@ static void reset_game(void) {
 //   'P' mode: gbc, gbc_raw, dmg palette (4 x RGB)       'O' OSD: flags (1 shown, 2 dim), 42x24 cells
 //   'L' LCD text: flags, 16x12 cells                   'G' a changed row: y, PackBits of 160 x u16
 //   'F' end of frame: u16 frame counter
+//   'A' (after 'W', bitstream 1.7): audio, 16 kHz mono unsigned 8-bit samples
 //   'R' (after 'W' instead of 'V'): 0x00 'R' y, then PackBits over the row's 80 words (pixel
 //       pairs) without a length: c < 128: c + 1 literal words, else c - 126 copies of one word
 //   'M' (after 'W', bitstream 1.5: rtl/sys/scr_engine.sv encodes the rows): 0x00 'M' y, then 10
@@ -1443,16 +1444,25 @@ static uint16_t scr_frame;
 static uint32_t scr_hash[144];        // per row, of the frame as last sent
 #define SCR_HTAB  0x770000u            // the stream engine's hash table (144 words)
 static int      scr_fix, scr_rows;     // scr_rows: 'R' rows (no length) instead of 'G'
+static int      scr_aud;               // 'A' packets: 16 kHz mono 8-bit audio (bitstream 1.7)
 
 static inline void scr_put(uint32_t b) { UART_TX = b; }          // the UART takes bits 7:0
 static void scr_hdr(char t, uint32_t len) { scr_put(0); scr_put(t); scr_put(len); scr_put(len >> 8); }
 
+// rows: 0 'G' rows ('V'), 1 'R' rows ('W'), 2 'R' rows at 115200 without audio ('Q': Bluetooth)
 static void scr_start(int rows) {
-    logf("#SCR %u\n", 33750000u / UDIV_FAST);
-    wait_ms(40);                       // the app reopens the port at the new rate
-    REG_UART = UDIV_FAST;
-    scr_on = 2;                        // quiet until a byte arrives at the new rate
-    scr_rows = rows;
+    int slow = rows == 2;
+    logf("#SCR %u\n", slow ? 115200u : 33750000u / UDIV_FAST);
+    if (!slow) {
+        wait_ms(40);                   // the app reopens the port at the new rate
+        REG_UART = UDIV_FAST;
+    }
+    scr_on = slow ? 1 : 2;             // quiet until a byte arrives at the new rate
+    scr_rows = rows != 0;
+    // the apps that ask with 'W' understand 'A' packets; with the stream engine (lite bitstream) the
+    // CPU waits while a frame is encoded, longer than the 4 ms audio FIFO: no audio there
+    scr_aud = rows == 1 && (REG_ID & 4) && !(REG_ID & 2);
+    if (scr_aud) REG_AUD = 1;
     scr_rx_ms = ms_now();
     scr_buf = scr_mode = scr_osd_flags = -1;
     scr_osd_ver = scr_lcd_ver = ~0u;
@@ -1461,7 +1471,19 @@ static void scr_start(int rows) {
     for (int i = 0; i < 144; i++) ht[i] = 0x5A5A5A5Au;
     scr_keep_ctrl = ctrl & C_FB_FORCE;
 }
+// 'A': the audio samples waiting in the FIFO (4 ms deep), sent between rows and at every poll
+static void scr_audio(void) {
+    if (!scr_aud) return;
+    uint32_t r = REG_AUD;                  // the read takes the oldest sample
+    uint32_t n = (r >> 8) & 127;
+    if (!n) return;
+    scr_hdr('A', n);
+    scr_put(r);
+    while (--n) scr_put(REG_AUD);
+}
+
 static void scr_stop(void) {
+    if (scr_aud) { REG_AUD = 0; scr_aud = 0; }
     wait_ms(5);
     REG_UART = UDIV_SLOW;
     scr_on = 0;
@@ -1628,6 +1650,7 @@ static void scr_poll(void) {
         uint8_t c = (uint8_t)r;
         scr_rx_ms = ms_now();
         if ((c == 'V' || c == 'W') && !scr_on) { scr_start(c == 'W'); return; }
+        if (c == 'Q' && !scr_on) { scr_start(2); return; }
         if (c == 'Y' && !scr_on) { upd_uart(); return; }
         if (c == 'Z' && !scr_on) { cfg_uart(); return; }
         else if (c == 'v' && scr_on) { scr_stop(); return; }
@@ -1642,6 +1665,7 @@ static void scr_poll(void) {
     if (!scr_on) return;
     if (ms_now() - scr_rx_ms > 2000) { scr_stop(); return; }
     if (scr_on == 2) return;
+    scr_audio();
     if (set.hdmi_off && !(ctrl & C_FB_FORCE)) { ctrl |= C_FB_FORCE; ctrl_write(); }   // keep the frames coming
     uint32_t st = stat_read();
     int gbc = st & 1, buf = (st >> 3) & 3;
@@ -1666,13 +1690,14 @@ static void scr_poll(void) {
     scr_buf = buf; scr_frame = fr;
     const volatile uint32_t *fb = (const volatile uint32_t *)sdram(FB_BASE + (uint32_t)buf * 0x10000);
     scr_fix = scr_fix < 143 ? scr_fix + 1 : 0;
-    if (scr_rows && (REG_ID & 0xFFFF) >= 2) {          // the bitstream encodes the rows itself
+    if (scr_rows && (REG_ID & 2)) {                    // the bitstream encodes the rows itself
         REG_SE_HTAB = SCR_HTAB >> 2;
         REG_SE = (uint32_t)scr_fix << 24 | (FB_BASE + (uint32_t)buf * 0x10000) >> 2;
         (void)REG_SE;
     } else
     for (int y = 0; y < 144; y++) {
         const volatile uint32_t *f = fb + y * 80;
+        scr_audio();
         uint32_t h = scr_row_hash(f);
         if (h == scr_hash[y] && y != scr_fix) continue;
         uint32_t r = REG_UART;                 // stop at once: the BL616 can hang on data nobody reads
@@ -1698,7 +1723,7 @@ static uint32_t poll_keys(uint32_t timeout) {
         uint32_t t = timeout;
         if (dp) { int32_t d = (int32_t)(rep_t - ms_now()); t = d > 0 ? (uint32_t)d : 1; if (t > timeout) t = timeout; }
         scr_poll();
-        if (scr_on && t > 8) t = 8;
+        if (scr_on && t > (scr_aud ? 2u : 8u)) t = scr_aud ? 2 : 8;   // the audio FIFO holds 4 ms
         else if (t > 250) t = 250;             // a stream request ('V') is only seen when polled
         REG_WAIT = t;
         (void)REG_WAIT;
@@ -1879,6 +1904,7 @@ static const char *const o_fps[]   = { "60 fps", "30 fps" };
 static const char *const o_dim[]   = { "Off", "15 s", "30 s", "60 s" };
 static const char *const o_poll[]  = { "200 ms", "500 ms" };
 static const char *const o_spkmode[] = { "PWM 66 kHz", "Sigma-delta" };
+static const char *const o_link[]  = { "Off", "Game Boy", "Bluetooth" };
 static const char *const o_leds[]  = { "Off", "Status", "CPU Clock", "Sound", "Activity" };
 static const char *const o_scene[] = { "Synthwave", "Space", "City", "Random" };
 static uint8_t ff_on;                   // fast forward toggled in the menu
@@ -2202,7 +2228,7 @@ static void build_page(void) {
     case P_CONTROLS:
         strcpy(page_title, "Controls");
         add_opt(G_PAD, "Swap A / B", "Exchange the A and B buttons.", &set.swap_ab, 2, o_offon);
-        add_opt(G_PAD, "Link Port", "Link cable to an original Game Boy: pins 41 SC, 42 SI, 56 SO through a 3.3 / 5 V level shifter.", &set.link_en, 2, o_offon);
+        add_opt(G_PAD, "Link Port", "Game Boy: link cable on pins 41 SC, 42 SI, 56 SO (level shifter). Bluetooth: a ZS-040 / HC-05 at 115200, its TX on 42, RX on 56.", &set.link_en, 3, o_link);
         add_info("Fast forward", "Hold R (DualShock)");
         add_info("Screenshot", "L (DualShock)");
         add_info("Open menu", "SELECT + START, S1");
@@ -3649,7 +3675,7 @@ int main(void) {
     held = REG_IN & 0xFFFF;
     for (;;) {
         scr_poll();
-        REG_WAIT = scr_on ? 8 : (held & (K_S1 | K_S2)) ? 50 : set.poll_slow ? 500 : 200;
+        REG_WAIT = scr_on ? (scr_aud ? 2 : 8) : (held & (K_S1 | K_S2)) ? 50 : set.poll_slow ? 500 : 200;
         (void)REG_WAIT;
         uint32_t in = REG_IN & 0xFFFF;
         uint32_t now = ms_now();

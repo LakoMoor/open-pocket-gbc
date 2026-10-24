@@ -27,6 +27,7 @@
 #define REG_DEEPWAIT IO(0x48)  // like REG_WAIT, and the SDRAM self-refreshes meanwhile (core paused)
 #define REG_SE      IO(0x6C)   // stream engine (REG_ID version >= 2): write {fix row, fb word address} starts; read waits, rows sent
 #define REG_SE_HTAB IO(0x70)   // write: word address of the engine's 144-word hash table
+#define REG_AUD     IO(0x74)   // USB audio (REG_ID bit 2): write [0] on; read [14:8] samples waiting, [7:0] the oldest (taken)
 #define REG_UART    IO(0x68)   // read: [11] byte received (clears) [7:0] the byte; write: [11:0] bit time in clocks (TX and RX)
 #define REG_GPIO    IO(0x64)   // write: [0] SCL low [1] SDA low [2] I2C on (pins 15/16); read: [0] SCL [1] SDA [2] USB power
 #define REG_PRN     IO(0x60)   // printer: read [8] byte ready [7:0] byte (clears); write: answer two bytes on
@@ -72,6 +73,7 @@
 #define C_PRINTER   (1u << 15)  // link port is a Game Boy Printer (REG_PRN), the core is cut off
 #define C_PRN_VIRT  (1u << 16)  // virtual printer: the core's serial port talks to REG_PRN
 #define C_LED_SHIFT 17          // [18:17] what the LEDs show: status, CPU clock, sound, activity
+#define C_BT        (1u << 19)  // ZS-040 / HC-05 Bluetooth serial module on the link pins (42 RX, 56 TX)
 
 // SDRAM layout (byte addresses, the CPU sees SDRAM at 0)
 #define ROM_BASE    0x000000u

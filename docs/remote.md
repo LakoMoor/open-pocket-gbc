@@ -27,7 +27,7 @@ The remote is OR-ed with the DualShock and the GPIO buttons. The menu and reset 
 Studio (Remote → live picture) and the Android app (Remote → live) show the board's real picture, and **Screenshot** saves it as PNG (the game 3× and the HDMI view with the menu): the running game and the menu, composed like the HDMI output and the LCD. This needs firmware and bitstream 1.3. The UART bit time became a register (`REG_UART`, 0x68), so the link can run faster than 115200.
 
 **Handshake:**
-1. The app sends `W` at 115200 (firmware 1.3 knows only `V`: the apps fall back to it after ~2 s).
+1. The app sends `W` at 115200 (firmware 1.3 knows only `V`: the apps fall back to it after ~2 s). Over Bluetooth the app sends `Q` instead: the firmware answers `#SCR 115200` and streams `R` rows without changing the rate and without audio.
 2. The firmware answers `#SCR 1985294`, then switches TX and the remote's RX to 1.985 Mbaud (33.75 MHz / 17).
 3. The app reopens the port at 2 Mbaud and sends `.`. The firmware stays quiet until a byte arrives at the new rate: data sent while the BL616 still runs at 115200 can hang the bridge until the cable is replugged. Button characters keep working at that rate.
 4. The app sends `.` every half second. After 2 s without a byte, or after `v` (checked between rows), the firmware goes back to 115200. Stop the stream before closing the port.
@@ -43,6 +43,7 @@ Studio (Remote → live picture) and the Android app (Remote → live) show the 
 | `R` | (after `W`) a changed row without a length: `0x00`, `R`, y, then the PackBits of `G`; it ends after 160 pixels. The firmware saves a pass over the row. |
 | `M` | (after `W`, only with the optional hardware engine) a changed row: `0x00`, `M`, y, then 10 groups of 8 words: a mask byte (bit n set: word n repeats the word before it; before the first word of the row comes 0), then the other words of the group, 4 bytes each. |
 | `F` | end of frame: u16 frame counter |
+| `A` | (after `W`, bitstream 1.7) audio: 16 kHz mono unsigned 8-bit samples, at most 64 per packet. The bitstream fills a 4 ms FIFO and the firmware empties it between rows. |
 
 **Pixels and speed:**
 - Pixels come straight from the framebuffer: GBC 15-bit colour, or a DMG shade in bits 1:0.

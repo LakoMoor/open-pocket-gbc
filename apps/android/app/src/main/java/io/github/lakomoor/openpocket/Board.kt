@@ -31,6 +31,11 @@ object Board : SerialInputOutputManager.Listener {
 
     private var port: UsbSerialPort? = null
     private var io: SerialInputOutputManager? = null
+    // or a ZS-040 / HC-05 Bluetooth module on the link pins (Menu › Controls › Link Port › Bluetooth),
+    // fixed at 115200: remote, settings, log and a slow live screen ('Q')
+    @Volatile private var bt: android.bluetooth.BluetoothSocket? = null
+    val viaBluetooth get() = bt != null
+    private val linked get() = port != null || bt != null
     private val rx = StringBuilder()
     @Volatile private var dump: ((String) -> Unit)? = null
     private val writer = Executors.newSingleThreadExecutor()
@@ -62,17 +67,50 @@ object Board : SerialInputOutputManager.Listener {
         }.also { _state.value = it }
     }
 
+    @android.annotation.SuppressLint("MissingPermission")
+    fun connectBluetooth(dev: android.bluetooth.BluetoothDevice) {
+        if (linked) return
+        Thread {
+            try {
+                val spp = java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+                val s = dev.createRfcommSocketToServiceRecord(spp)
+                s.connect()
+                bt = s
+                _state.value = State.Connected
+                appendLog("connected over Bluetooth (${dev.name})\n")
+                val inp = s.inputStream
+                val buf = ByteArray(1024)
+                while (true) {
+                    val n = inp.read(buf)
+                    if (n < 0) break
+                    if (n > 0) onNewData(buf.copyOf(n))
+                }
+            } catch (e: Exception) {
+                appendLog("Bluetooth: ${e.message}\n")
+            }
+            if (bt != null) disconnect() else _state.value = State.Error
+        }.also { it.isDaemon = true }.start()
+    }
+
     fun disconnect() {
         _live.value = false; fast = false; keepalive?.interrupt(); keepalive = null
+        LiveAudio.stop()
         io?.stop(); io = null
         try { port?.close() } catch (_: Exception) {}
         port = null
+        try { bt?.close() } catch (_: Exception) {}
+        bt = null
         _state.value = State.NoDevice
     }
 
     private fun write(s: String) {
-        val p = port ?: return
-        writer.execute { try { p.write(s.toByteArray(), 200) } catch (e: Exception) { appendLog("USB: ${e.message}\n"); disconnect() } }
+        val p = port
+        val b = bt
+        if (p == null && b == null) return
+        writer.execute {
+            try { if (p != null) p.write(s.toByteArray(), 200) else b!!.outputStream.write(s.toByteArray()) }
+            catch (e: Exception) { appendLog((if (p != null) "USB: " else "Bluetooth: ") + e.message + "\n"); disconnect() }
+        }
     }
 
     fun press(k: Char, down: Boolean) = write(if (down) k.uppercase() else k.lowercase())
@@ -80,7 +118,7 @@ object Board : SerialInputOutputManager.Listener {
 
     /** LCD (12 rows of 16 cells) and HDMI (24 rows of 42) as hex rows, or null when no menu is open. */
     fun menuShot(): Pair<List<String>, List<String>>? {
-        if (port == null) return null
+        if (!linked) return null
         val lock = Object()
         var text: String? = null
         synchronized(rx) { rx.setLength(0) }
@@ -104,16 +142,17 @@ object Board : SerialInputOutputManager.Listener {
     private var keepalive: Thread? = null
 
     fun startScreen() {
-        if (port == null || _live.value) return
+        if (!linked || _live.value) return
         _live.value = true
-        write("W")
+        val ask0 = if (bt != null) "Q" else "W"         // Bluetooth stays at 115200: slow rows, no audio
+        write(ask0)
         keepalive = Thread {
             // the firmware keeps only the last byte it received: until it answers, send nothing but
             // 'W' (after ~2 s also 'V' for firmware 1.3)
             var ask = 0
-            while (_live.value && port != null) {
+            while (_live.value && linked) {
                 try { Thread.sleep(if (fast) 500L else 300L) } catch (_: InterruptedException) { break }
-                write(if (fast) "." else if (++ask > 6 && ask % 2 == 1) "V" else "W")
+                write(if (fast) "." else if (bt == null && ++ask > 6 && ask % 2 == 1) "V" else ask0)
             }
         }.also { it.isDaemon = true; it.start() }
     }
@@ -123,6 +162,8 @@ object Board : SerialInputOutputManager.Listener {
         _live.value = false
         keepalive?.interrupt(); keepalive = null
         write("v")
+        LiveAudio.stop()
+        if (bt != null) { fast = false; return }
         writer.execute {
             // back to 115200 only once the stream is quiet: data at 2 Mbaud into a port at 115200
             // can hang the BL616 (the firmware finishes the frame it is sending)
@@ -222,7 +263,7 @@ object Board : SerialInputOutputManager.Listener {
     @Volatile private var cfgTap: StringBuilder? = null
 
     private fun cfgSession(lines: List<String>, until: Regex): List<String> {
-        if (port == null) error("no board on USB")
+        if (!linked) error("no board connected")
         if (_live.value) { stopScreen(); Thread.sleep(800) }
         val tap = StringBuilder()
         cfgTap = tap
@@ -281,7 +322,10 @@ object Board : SerialInputOutputManager.Listener {
             rx.delete(0, i + 1)
             val lines = text.split('\n').map { it.trimEnd('\r') }
             // the firmware switched to the stream rate (1.985 Mbaud): 2 Mbaud is within 1 %
-            if (_live.value && !fast && lines.any { it.startsWith("#SCR ") }) goFast(2_000_000)
+            if (_live.value && !fast) lines.firstOrNull { it.startsWith("#SCR ") }?.let {
+                if (it.removePrefix("#SCR ").trim() == "115200") { pState = 0; fast = true; appendLog("screen stream at 115200 baud\n") }
+                else goFast(2_000_000)
+            }
             val keep = lines.filter { l ->
                 l.isNotEmpty() && !l.startsWith("LCD-") && !l.startsWith("OSD-") &&
                     !((l.length == 64 || l.length == 84) && l.all { it in "0123456789abcdef" })

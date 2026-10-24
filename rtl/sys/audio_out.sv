@@ -11,7 +11,9 @@ module audio_out (
     input      [15:0] in_r,
     output reg        clk_audio,
     output reg [15:0] out_l,
-    output reg [15:0] out_r
+    output reg [15:0] out_r,
+    output reg        smp,          // one clock per 48 kHz sample
+    output reg  [7:0] mono8         // (left + right) / 2, unsigned 8 bit, before the volume (USB stream)
 );
 
 reg signed [19:0] l1, r1, l2, r2;
@@ -34,15 +36,19 @@ function automatic [15:0] vol(input signed [15:0] x);
     endcase
 endfunction
 
+wire signed [16:0] mono = $signed(l2[19:4]) + $signed(r2[19:4]);
 reg [9:0] div;
 always @(posedge clk) begin
     if (div == 10'd702) div <= 0;
     else div <= div + 1'd1;
+    smp <= 0;
     if (div == 10'd0)   clk_audio <= 1;
     if (div == 10'd351) begin
         clk_audio <= 0;
         out_l <= mute ? 16'd0 : vol(l2[19:4]);
         out_r <= mute ? 16'd0 : vol(r2[19:4]);
+        mono8 <= mute ? 8'h80 : mono[16:9] ^ 8'h80;
+        smp   <= 1;
     end
 end
 
