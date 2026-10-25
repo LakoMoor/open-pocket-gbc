@@ -28,6 +28,8 @@ Interface 1 stays a serial port (COM*n*). It is used by the [USB remote](remote.
 ./build.sh gbc_top          # ~8 minutes; output: build/gbc_top/gbc_top.fs
 ```
 
+Set `OUT_DIR` to keep separate build variants, for example `OUT_DIR=build/gbc_top_1.9 ./build.sh gbc_top`. Each directory keeps its own synthesis, placement and packed bitstream; Full and Minimal builds no longer need to overwrite each other's output.
+
 The flow:
 
 1. `read_slang` reads all SystemVerilog/Verilog sources listed in `rtl/files.f`.

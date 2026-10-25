@@ -7,7 +7,7 @@ TOOLS=${TOOLS:-/e/tools/oss-cad-suite}
 export PATH="$TOOLS/bin:$TOOLS/lib:$PATH"
 
 TOP=${1:-gbc_top}
-OUT=build/$TOP
+OUT=${OUT_DIR:-build/$TOP}
 mkdir -p "$OUT"
 
 case "$TOP" in

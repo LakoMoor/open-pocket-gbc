@@ -113,7 +113,8 @@ object Board : SerialInputOutputManager.Listener {
         }
     }
 
-    fun press(k: Char, down: Boolean) = write(if (down) k.uppercase() else k.lowercase())
+    fun press(k: Char, down: Boolean) { if (cfgTap == null) write(if (down) k.uppercase() else k.lowercase()) }
+    fun releaseButtons() { if (cfgTap == null) write("0") }
     fun tap(k: Char) { write(k.uppercase()); writer.execute { Thread.sleep(100) }; write(k.lowercase()) }
 
     /** LCD (12 rows of 16 cells) and HDMI (24 rows of 42) as hex rows, or null when no menu is open. */
@@ -262,6 +263,7 @@ object Board : SerialInputOutputManager.Listener {
     private val cfgPages = listOf("Display", "Audio", "Controls", "System", "Power")
     @Volatile private var cfgTap: StringBuilder? = null
 
+    @Synchronized
     private fun cfgSession(lines: List<String>, until: Regex): List<String> {
         if (!linked) error("no board connected")
         if (_live.value) { stopScreen(); Thread.sleep(800) }
@@ -271,7 +273,7 @@ object Board : SerialInputOutputManager.Listener {
             val t0 = System.currentTimeMillis()
             while (!synchronized(tap) { tap.contains("#CFG") }) {
                 if (System.currentTimeMillis() - t0 > 5000) error("the board did not answer: settings over USB need firmware 1.6 or newer")
-                write("Z"); Thread.sleep(300)
+                write("[Z"); Thread.sleep(300)
             }
             val out = ArrayList<String>()
             for (l in lines) {
@@ -287,7 +289,7 @@ object Board : SerialInputOutputManager.Listener {
             }
             write("bye\n"); Thread.sleep(100)
             return out
-        } finally { cfgTap = null }
+        } finally { write("]0"); cfgTap = null }
     }
 
     /** The settings of the board's menu pages, or an error message. */

@@ -1,5 +1,7 @@
 # Open Pocket GBC
 
+**Веб-пульт:** [Web Studio](https://lakomoor.github.io/open-pocket-gbc/web/) — управление по USB, живой экран, PNG-снимки, настройки и журнал без установки приложения. Нужен Chrome или Edge на компьютере. [Инструкция](web.md).
+
 **Game Boy / Game Boy Color на Sipeed Tang Nano 20K: HDMI, меню в стиле Analogue Pocket, игры с SD-карты или встроенной flash, рабочие сохранения, SPI-дисплей и пищалка. Собирается только открытыми инструментами.**
 
 [English version](../README.md)

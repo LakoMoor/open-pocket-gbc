@@ -60,7 +60,10 @@ private val PillC = Color(0xFFFFFFFF)
 
 class MainActivity : ComponentActivity() {
     private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) { Board.connect(c) }
+        override fun onReceive(c: Context, i: Intent) {
+            if (i.action == UsbManager.ACTION_USB_DEVICE_DETACHED) Board.disconnect()
+            else Board.connect(c)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +79,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         Board.connect(this)                         // USB device attached
+    }
+
+    override fun onPause() {
+        Board.releaseButtons()                 // release touch buttons when the app loses focus
+        super.onPause()
     }
 
     override fun onDestroy() {

@@ -119,3 +119,14 @@ pre.log { height: calc(100vh - 300px); min-height: 260px; overflow: auto; backgr
 #simhdmi:focus, #simlcd:focus { box-shadow: 0 0 0 2px var(--paper); }
 .seg.small { margin: 0; padding: 3px; }
 .seg.small button { padding: 5px 12px; font-size: 12px; }
+
+/* Visible focus and comfortable remote controls for keyboard and touch use. */
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.k { touch-action: none; user-select: none; }
+@media (max-width: 900px) {
+  .navpill { flex-wrap: wrap; gap: 12px; border-radius: 18px; }
+  nav { overflow-x: auto; max-width: 100%; }
+  .screens { flex-wrap: wrap; }
+  .scr { max-width: 100%; height: auto; }
+  .cfg .opt { flex-wrap: wrap; gap: 10px; }
+}

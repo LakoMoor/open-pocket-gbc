@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.8"
+#define FW_VERSION      "1.9"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -1452,7 +1452,7 @@ static int      scr_aud;               // 'A' packets: 16 kHz mono 8-bit audio (
 static inline void scr_put(uint32_t b) { UART_TX = b; }          // the UART takes bits 7:0
 static void scr_hdr(char t, uint32_t len) { scr_put(0); scr_put(t); scr_put(len); scr_put(len >> 8); }
 
-// rows: 0 'G' rows ('V'), 1 'R' rows ('W'), 2 'R' rows at 115200 without audio ('Q': Bluetooth)
+// rows: 0 'G' rows ('V'), 1 'R' rows ('W'), 2 'R' rows at 115200 without audio ('Q': web / Bluetooth)
 static void scr_start(int rows) {
     int slow = rows == 2;
     logf("#SCR %u\n", slow ? 115200u : 33750000u / UDIV_FAST);
@@ -1652,6 +1652,8 @@ static void scr_poll(void) {
     if (r & 0x800) {
         uint8_t c = (uint8_t)r;
         scr_rx_ms = ms_now();
+        // Harmless discovery for web clients; old firmware ignores '?'. Never inject text into a stream.
+        if (c == '?' && !scr_on) { logf("#HELLO " FW_VERSION " %08x\n", (unsigned)REG_ID); return; }
         if ((c == 'V' || c == 'W') && !scr_on) { scr_start(c == 'W'); return; }
         if (c == 'Q' && !scr_on) { scr_start(2); return; }
         if (c == 'Y' && !scr_on) { upd_uart(); return; }

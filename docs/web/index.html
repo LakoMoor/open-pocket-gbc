@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101113">
+  <meta name="description" content="Open Pocket в браузере: USB-пульт, экран и настройки Tang Nano 20K без установки приложения.">
+  <title>Open Pocket · Web Studio</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="theme.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="https://lakomoor.github.io/open-pocket-gbc/">Open Pocket <span>Web Studio</span></a>
+    <nav aria-label="Разделы">
+      <button class="nav active" data-view="play" aria-current="page"><span>01</span> Пульт</button>
+      <button class="nav" data-view="settings"><span>02</span> Настройки</button>
+      <button class="nav" data-view="guide"><span>03</span> Подключение</button>
+      <button class="nav" data-view="logs"><span>04</span> Журнал <i id="log-count">0</i></button>
+    </nav>
+    <div class="language" role="group" aria-label="Язык интерфейса"><button data-language="ru" lang="ru" aria-pressed="true">RU</button><button data-language="en" lang="en" aria-pressed="false">EN</button></div>
+  </aside>
+  <div class="workspace">
+    <header><span><span class="led" id="led"></span><span id="connection">Нет подключения</span> · Tang Nano 20K</span><button id="connect" class="primary">Подключить плату ↗</button></header>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <main>
+      <section id="play" class="view">
+        <div class="heading"><div><p class="eyebrow">PLAY / USB REMOTE</p><h1>Продолжим игру.</h1><p class="muted">Пульт, живой экран и снимки — в одном месте.</p></div><span class="chip" id="version">OPEN POCKET GBC</span></div>
+        <div class="play-layout">
+          <div class="console">
+            <div class="screen-toolbar"><span><b class="led"></b> <span id="screen-status">ЭКРАН ПЛАТЫ</span></span><span id="fps">USB LIVE</span></div>
+            <div class="display" id="display"><canvas id="screen" width="720" height="480" aria-label="Изображение с платы"></canvas><div id="empty"><canvas id="wordmark" width="160" height="44" aria-label="Open Pocket"></canvas><p>Подключи Open Pocket по USB<br>и включи трансляцию экрана.</p></div></div>
+            <div class="screen-actions"><button id="stream" data-board disabled>Включить экран</button><button id="screenshot" disabled>↓ PNG</button><button id="fullscreen" title="Полный экран" aria-label="Полный экран">⛶</button></div>
+            <div class="controller">
+              <div class="dpad"><button data-key="U" aria-label="Вверх">▲</button><button data-key="L" aria-label="Влево">◀</button><span></span><button data-key="R" aria-label="Вправо">▶</button><button data-key="D" aria-label="Вниз">▼</button></div>
+              <div class="center-buttons"><button data-key="S">SELECT</button><button data-key="M">MENU</button><button data-key="T">START</button></div>
+              <div class="ab"><button data-key="B">B</button><button data-key="A">A</button></div>
+            </div>
+            <div class="console-footer"><span>OPEN POCKET <b>COLOR</b></span><span>● ● ● ● ●</span></div>
+          </div>
+          <aside class="play-side">
+            <div class="info-panel"><p class="eyebrow">ПОДКЛЮЧЕНИЕ</p><h2 id="board-title">Готов, когда ты.</h2><p id="board-detail">Подключи USB-кабель с передачей данных. Выбери последовательный порт платы, обычно USB Serial Port B.</p><a href="#guide" class="text-link" data-goto="guide">Как подключиться ↗</a></div>
+            <div class="info-panel keys"><p class="eyebrow">КЛАВИАТУРА</p><div><span>Движение</span><kbd>↑ ↓ ← →</kbd></div><div><span>A / B</span><kbd>X / Z</kbd></div><div><span>Start / Select</span><kbd>↵ / ⌫</kbd></div><div><span>Меню</span><kbd>M</kbd></div></div>
+            <p class="footnote">Трансляция через USB на 115200 бод: около 1 кадра/с, без звука. На HDMI и LCD игра идёт с обычной частотой.</p>
+          </aside>
+        </div>
+      </section>
+      <section id="settings" class="view" hidden>
+        <div class="heading"><div><p class="eyebrow">BOARD / SETTINGS</p><h1>Настрой под себя.</h1><p class="muted">Изменения сохраняются в памяти платы.</p></div><button id="read-settings" data-board disabled>Прочитать с платы ↻</button></div>
+        <label class="search-label">Поиск настройки<input id="search" type="search" placeholder="Экран, звук, питание…"></label>
+        <p id="settings-status" class="muted" role="status">Подключи плату и прочитай настройки. Нужна прошивка 1.6 или новее.</p>
+        <div id="options"></div>
+      </section>
+      <section id="guide" class="view" hidden>
+        <div class="heading"><div><p class="eyebrow">START / CONNECT</p><h1>Без установки.</h1><p class="muted">Всё общение с платой происходит на твоём компьютере.</p></div></div>
+        <div class="guide-grid"><article><span class="step">01</span><h2>Открой в Chrome или Edge</h2><p>Нужен браузер на компьютере с Web Serial и страница по HTTPS или localhost. Firefox, Safari и мобильные браузеры здесь не поддерживаются.</p></article><article><span class="step">02</span><h2>Подключи USB</h2><p>Закрой Studio, терминал и другие программы, занявшие COM-порт. Нажми «Подключить плату» и выбери USB Serial Port платы: UART / интерфейс B.</p></article><article><span class="step">03</span><h2>Играй и настраивай</h2><p>Кнопки работают сразу. Экран требует прошивку и битстрим 1.3+, настройки — прошивку 1.6+. Новая прошивка 1.9 также сообщает свою версию при подключении.</p></article></div>
+        <article class="info-panel"><h2>Обновление прошивки и битстрима</h2><p>Веб-пульт не прошивает плату. Для обновления используй Studio или скопируй <code>opgbc_fw.bin</code> и <code>opgbc_fpga.bin</code> в корень microSD, затем открой System → System Update на плате. После обновления битстрима выключи и включи питание.</p><a class="text-link" href="https://github.com/LakoMoor/open-pocket-gbc/releases" target="_blank" rel="noopener">Скачать релиз ↗</a></article>
+      </section>
+      <section id="logs" class="view" hidden><div class="heading"><div><p class="eyebrow">DEVICE / LOG</p><h1>Всё на виду.</h1><p class="muted">Диагностика USB и сообщения прошивки.</p></div><div><button id="download-log">↓ Сохранить</button><button id="clear-log">Очистить</button></div></div><pre id="log" tabindex="0" aria-label="Журнал платы">Open Pocket Web Studio готов к подключению.
+</pre></section>
+    </main>
+    <footer><span>OPEN POCKET / OPEN SOURCE FPGA GAMING</span><a href="https://github.com/LakoMoor/open-pocket-gbc" target="_blank" rel="noopener">GitHub ↗</a></footer>
+  </div>
+</body>
+</html>

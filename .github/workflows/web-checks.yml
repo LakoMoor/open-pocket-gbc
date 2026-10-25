@@ -1,0 +1,25 @@
+name: Web and UART checks
+on:
+  push:
+    paths: ['docs/web/**', 'tools/tests/**', 'rtl/io/uart_pad.sv', 'sim/tang/tb_uart_pad.sv', '.github/workflows/web-checks.yml']
+  pull_request:
+    paths: ['docs/web/**', 'tools/tests/**', 'rtl/io/uart_pad.sv', 'sim/tang/tb_uart_pad.sv', '.github/workflows/web-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test tools/tests/web_protocol.test.mjs tools/tests/i18n.test.mjs
+      - run: node --check docs/web/app.mjs
+      - run: cmp rtl/video/font8x8.hex docs/web/font8x8.hex
+      - run: sudo apt-get update && sudo apt-get install -y iverilog
+      - run: |
+          mkdir -p build
+          iverilog -g2012 -s tb_uart_pad -o build/tb_uart_pad.vvp rtl/io/uart_pad.sv sim/tang/tb_uart_pad.sv
+          vvp build/tb_uart_pad.vvp

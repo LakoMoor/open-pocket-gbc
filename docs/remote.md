@@ -22,6 +22,8 @@ The Tang Nano 20K's USB-C port also carries a serial port from the on-board BL61
 
 The remote is OR-ed with the DualShock and the GPIO buttons. The menu and reset keys go through the same 2 ms debounce as S1/S2, so hold them for at least ~10 ms.
 
+**Web Studio (1.9):** [browser remote](https://lakomoor.github.io/open-pocket-gbc/web/), [setup](web.md). Bitstream 1.9 adds `[` / `]` to suspend button decoding around settings commands and an opt-in 2 s lease renewed by `~`. `0` releases inputs and disarms the lease. Legacy clients keep their original behaviour. Firmware 1.9 answers `?` outside streaming with `#HELLO <firmware version> <REG_ID hex>`.
+
 ## Live screen
 
 Studio (Remote → live picture) and the Android app (Remote → live) show the board's real picture, and **Screenshot** saves it as PNG (the game 3× and the HDMI view with the menu): the running game and the menu, composed like the HDMI output and the LCD. This needs firmware and bitstream 1.3. The UART bit time became a register (`REG_UART`, 0x68), so the link can run faster than 115200.

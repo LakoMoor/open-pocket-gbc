@@ -122,13 +122,14 @@ async function uartUpdate(data, fpga, label, step, steps) {
     log(fpga ? 'bitstream installed over USB serial: switch the power off and on\n' : 'firmware installed over USB serial; it restarts\n');
   } finally {
     updRx = null;
-    if (port && port.isOpen) { port.write('0'); }              // file bytes also count as remote keys: release all
+    if (port && port.isOpen) { port.write(']0'); }             // file bytes can enter command mode or press keys
   }
 }
 
 // ---------------------------------------------------------------- board settings ('Z', firmware 1.6+)
 // lines in lower case only: upper case letters are remote key presses
 async function cfgSession(lines, until) {
+  if (busy || updRx) throw new Error('Another transfer or settings request is running.');
   if (!(await connect())) throw new Error('no board on USB');
   if (scrOn) { screen(false); await sleep(800); }
   let text = '';
@@ -137,7 +138,7 @@ async function cfgSession(lines, until) {
     const t0 = Date.now();
     while (!text.includes('#CFG')) {
       if (Date.now() - t0 > 5000) throw new Error('the board did not answer: settings over USB need firmware 1.6 or newer');
-      port.write('Z'); await sleep(300);
+      port.write('[Z'); await sleep(300);
     }
     text = text.slice(text.indexOf('#CFG') + 4);
     const out = [];
@@ -151,7 +152,7 @@ async function cfgSession(lines, until) {
     port.write('bye\n');
     await sleep(100);
     return out;
-  } finally { updRx = null; }
+  } finally { if (port && port.isOpen) port.write(']0'); updRx = null; }
 }
 const CFG_PAGES = ['Display', 'Audio', 'Controls', 'System', 'Power'];
 ipcMain.handle('cfg-list', async () => {
@@ -416,6 +417,7 @@ function onData(d) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function key(k, down) {
+  if (busy || updRx) return false;             // never inject button bytes into a binary update or settings command
   if (!(await connect())) return false;
   if (down === undefined) { port.write(k.toUpperCase()); await sleep(100); port.write(k.toLowerCase()); }
   else port.write(down ? k.toUpperCase() : k.toLowerCase());

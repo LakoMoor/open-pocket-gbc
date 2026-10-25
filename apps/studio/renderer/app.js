@@ -6,6 +6,7 @@ const ago = t => { const s = (Date.now() - t) / 1000; return s < 3600 ? Math.max
 
 // ---------------------------------------------------------------- tabs
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  releaseRemote();
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + t.dataset.tab));
 });
@@ -315,18 +316,26 @@ document.querySelectorAll('#pmode button').forEach(b => b.onclick = async () => 
 // ---------------------------------------------------------------- remote: buttons
 document.querySelectorAll('.k').forEach(b => {
   const k = b.dataset.k;
-  b.onpointerdown = () => { b.classList.add('down'); S.key(k, true); };
+  b.onpointerdown = e => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); S.key(k, true); };
   const up = () => { if (b.classList.contains('down')) { b.classList.remove('down'); S.key(k, false); } };
-  b.onpointerup = up; b.onpointerleave = up;
+  b.onpointerup = up; b.onpointercancel = up; b.onlostpointercapture = up;
 });
 const keymap = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R', x: 'A', z: 'B', Enter: 'T', Backspace: 'S', m: 'M' };
 const held = {};
 addEventListener('keydown', e => {
   if (!$('#p-remote').classList.contains('on')) return;
+  if (/INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target.tagName) || e.ctrlKey || e.altKey || e.metaKey) return;
   const k = keymap[e.key]; if (!k || held[k]) return;
   held[k] = 1; e.preventDefault(); S.key(k, true);
   const b = document.querySelector(`.k[data-k="${k}"]`); if (b) b.classList.add('down');
 });
+function releaseRemote() {
+  for (const k of Object.keys(held)) held[k] = 0;
+  document.querySelectorAll('.k.down').forEach(b => b.classList.remove('down'));
+  S.key('0', true);
+}
+addEventListener('blur', releaseRemote);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseRemote(); });
 addEventListener('keyup', e => {
   const k = keymap[e.key]; if (!k || !held[k]) return;
   held[k] = 0; S.key(k, false);

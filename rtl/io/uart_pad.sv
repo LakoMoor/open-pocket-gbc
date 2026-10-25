@@ -2,10 +2,13 @@
 // One ASCII character per event, upper case = press, lower case = release:
 //   U/u up  D/d down  L/l left  R/r right  A/a A  B/b B  S/s select  T/t start
 //   M/m menu key (like S1)   X/x reset key (like S2)   0 releases everything
-// tools/remote.py sends these from the PC.
+// '[' / ']' suspend / resume button decoding during settings commands.
+// '~' opts into a 2 s input lease and renews it; '0' releases and disarms it.
+// Legacy clients do not send '~' and keep their original hold behaviour.
 module uart_pad #(
     parameter CLK_HZ = 33_750_000,
-    parameter BAUD   = 115_200
+    parameter BAUD   = 115_200,
+    parameter LEASE_MS = 2000
 ) (
     input             clk,
     input             reset,
@@ -52,11 +55,42 @@ assign rx_seen = strobe;
 assign rx_byte = data;
 wire press = (data >= "A") && (data <= "Z");
 wire [7:0] up = press ? data : data - 8'h20;
+localparam MS_DIV = CLK_HZ / 1000 > 0 ? CLK_HZ / 1000 : 1;
+localparam MS_BITS = MS_DIV > 1 ? $clog2(MS_DIV) : 1;
+localparam AGE_BITS = LEASE_MS > 1 ? $clog2(LEASE_MS + 1) : 1;
+reg [MS_BITS-1:0] lease_tick;
+reg [AGE_BITS-1:0] lease_age;
+reg lease_on, command_mode;
 always @(posedge clk) begin
     if (reset) begin
         pad <= 0; key_menu <= 0; key_reset <= 0;
-    end else if (strobe) begin
-        case (up)
+        lease_tick <= 0; lease_age <= 0; lease_on <= 0; command_mode <= 0;
+    end else begin
+        if (lease_on) begin
+            if (lease_tick == MS_DIV - 1) begin
+                lease_tick <= 0;
+                if (lease_age < LEASE_MS) lease_age <= lease_age + 1'd1;
+                if (lease_age >= LEASE_MS - 1) begin
+                    pad <= 0; key_menu <= 0; key_reset <= 0;
+                    command_mode <= 0;
+                end
+            end else lease_tick <= lease_tick + 1'd1;
+        end
+        if (strobe && data == "~") begin
+            lease_on <= 1; lease_age <= 0; lease_tick <= 0;
+        end
+        if (strobe && data == "[") begin
+            command_mode <= 1;
+            lease_on <= 1; lease_age <= 0; lease_tick <= 0;
+            pad <= 0; key_menu <= 0; key_reset <= 0;
+        end
+        if (strobe && command_mode) begin lease_age <= 0; lease_tick <= 0; end
+        if (strobe && data == "]") command_mode <= 0;
+        if (strobe && data == "0") begin
+            pad <= 0; key_menu <= 0; key_reset <= 0;
+            if (!command_mode) lease_on <= 0;
+        end else if (strobe && !command_mode) begin
+          case (up)
             "U": pad[4]    <= press;
             "D": pad[5]    <= press;
             "L": pad[6]    <= press;
@@ -67,8 +101,9 @@ always @(posedge clk) begin
             "T": pad[3]    <= press;
             "M": key_menu  <= press;
             "X": key_reset <= press;
-            default: if (data == "0") begin pad <= 0; key_menu <= 0; key_reset <= 0; end
-        endcase
+            default: ;
+          endcase
+        end
     end
 end
 
