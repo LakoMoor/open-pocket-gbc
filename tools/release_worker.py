@@ -72,6 +72,14 @@ class Worker:
 
     def run(self, args, *, cwd=None, timeout=900, capture=False, log='commands.log'):
         cwd = cwd or self.source
+        # Windows CreateProcess does not use the child's env PATH to resolve argv[0].
+        # Resolve it here against the toolchain PATH before creating the process.
+        args = list(map(str, args))
+        executable = shutil.which(args[0], path=self.env['PATH'])
+        if executable:
+            args[0] = executable
+        elif not Path(args[0]).is_file():
+            raise RuntimeError('Required executable not found: ' + args[0])
         if capture:
             return subprocess.check_output(args, cwd=cwd, env=self.env, text=True, encoding='utf-8', errors='replace', timeout=timeout, **CREATE).strip()
         with (self.base / log).open('a', encoding='utf-8') as out:
