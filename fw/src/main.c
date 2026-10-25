@@ -12,7 +12,7 @@
 #include "osd.h"
 #include "ff.h"
 
-#define FW_VERSION      "1.9"
+#define FW_VERSION      "1.9.1"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -116,7 +116,7 @@ static void apply_settings(void) {
     ctrl |= ((uint32_t)set.sys_mode << C_SYS_SHIFT) | (set.hdmi_off || minimal ? C_HDMI_OFF : 0) |
             (set.lcd_off && !minimal ? C_LCD_OFF : 0) | (set.led_en ? C_LED | (uint32_t)((set.led_en - 1) & 3) << C_LED_SHIFT : 0) |
             (set.sdram_pd ? C_SDRAM_PD : 0) | (set.lcd_slow ? C_LCD_SLOW : 0) | (set.link_en == 1 ? C_LINK : 0) | (set.link_en == 2 ? C_BT : 0) |
-            (set.vprinter ? C_PRN_VIRT : 0);
+            (set.vprinter && !minimal ? C_PRN_VIRT : 0);
     ctrl_write();
 }
 
@@ -1154,21 +1154,33 @@ static int prn_last_rows;                 // the last finished page, kept in PRN
 
 static void vprn_reset(void) {
     memset(&pr, 0, sizeof pr);
-    REG_PRN = 0;
+    REG_PRN = 0x100;                 // flush the byte/bit shifter as well as the software parser
 }
 
 // called from the main loop: answer the bytes, finish a page when the game is done printing
 static void vprn_poll(uint32_t now) {
     uint32_t v;
     int got = 0;
-    while ((v = REG_PRN) & 0x100) { prn_byte((uint8_t)v); got = 1; }
+    while ((v = REG_PRN) & 0x100) {
+        // PRINT copies tile data and RLE can expand a single byte into 129 bytes.
+        // Hold the virtual Game Boy's serial clock until its reply has been queued.
+        int was_paused = (ctrl & C_PAUSE) != 0;
+        ctrl_bits(C_PAUSE, 1);
+        prn_byte((uint8_t)v);
+        ctrl_bits(C_PAUSE, was_paused);
+        got = 1;
+    }
     if (got) { pr.last_ms = now; return; }
+    if (pr.pos && now - pr.last_ms > 1000) pr.pos = pr.run = pr.lit = 0;
     if (now - pr.last_ms < 500) return;               // a transfer is going on
     if (pr.page_ready || (pr.page_len && !pr.printing && now - pr.last_ms > 1500)) {
         uint32_t rows = pr.page_len / ROW_BYTES;
         pr.page_ready = 0;
         if (!rows) return;
+        int was_paused = (ctrl & C_PAUSE) != 0;
+        ctrl_bits(C_PAUSE, 1);
         prn_save_bmp(rows);
+        ctrl_bits(C_PAUSE, was_paused);
         prn_last_rows = (int)rows;
         pr.page_len = 0;
         pr.pages++;
@@ -1390,6 +1402,7 @@ static int load_game_rom(int src, int idx, const char *path) {
     wait_ms(2);
     ctrl_bits(C_CORE_RST, 0);
     game.loaded = 1;
+    vprn_reset();
     if (copy_save && game.battery && game.save_bytes) save_write();    // the SD save goes along
 
     set.last_src = src;
@@ -1415,6 +1428,7 @@ static int load_game(int src, int idx, const char *path) {
 }
 
 static void reset_game(void) {
+    vprn_reset();
     if (!game.loaded) return;
     if (game.save_pending) save_write();
     uint32_t paused = ctrl & C_PAUSE;
@@ -2098,6 +2112,7 @@ static void build_page(void) {
         break;
     case P_TOOLS: {
         strcpy(page_title, "Tools");
+        if (REG_ID & 8) { add_info("Printer unavailable", "Install the Full bitstream to use a Game Boy Printer."); break; }
         item_t *it = add(I_PRINTER, G_DISPLAY, "Game Boy Printer", "Be a printer for a real Game Boy on the link port. The running game is closed first.");
         strcpy(it->value, "link port");
         add_info("Link pins", "41 SC  42 SI  56 SO");
@@ -3113,6 +3128,7 @@ static int opt_changed(item_t *it) {
     }
     if (it->val == &set.theme) { osd_invalidate(); build_cats(); }
     if (it->val == &set.home_scene && home_running) start_home();
+    if (it->val == &set.vprinter) vprn_reset();
     apply_settings();
     if (page == P_POWER) go(P_POWER, 1);              // refresh the preset value
     return 1;
@@ -3680,7 +3696,7 @@ int main(void) {
     last_input_ms = ms_now();
     held = REG_IN & 0xFFFF;
     for (;;) {
-        scr_poll();
+        if (!(set.vprinter && game.loaded && (pr.pos || ms_now() - pr.last_ms < 20))) scr_poll();
         REG_WAIT = scr_on ? (scr_aud ? 2 : 8) : (held & (K_S1 | K_S2)) ? 50 : set.poll_slow ? 500 : 200;
         (void)REG_WAIT;
         uint32_t in = REG_IN & 0xFFFF;
@@ -3712,7 +3728,12 @@ int main(void) {
         int open = ((rel & K_S1) && !s1_long && now - s1_down >= 20) || (press & K_UMENU) ||
                    ((in & K_SEL) && (in & K_START) && (press & (K_SEL | K_START)));
         if (home_running && (press & (K_A | K_X | K_START))) open = 1;     // PRESS START
-        if (set.vprinter && game.loaded) vprn_poll(now);
+        if (set.vprinter && game.loaded && !(REG_ID & 8)) {
+            vprn_poll(now);
+            // Keep servicing byte events while a packet is in flight. I2C status,
+            // autosave and screen work can otherwise delay the printer's reply.
+            if (pr.pos || now - pr.last_ms < 20) continue;
+        }
         status_poll();
         // play time (gaps over 5 s are the menu or sleep), fast forward, screenshot on L
         if (game.loaded && !(ctrl & C_PAUSE) && now - pt_last < 5000) play_ms += now - pt_last;

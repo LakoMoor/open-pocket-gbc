@@ -80,6 +80,12 @@ python tools/lcd_shot.py lcd.png --osd hdmi.png --keys "M . D D"
 
 All settings are stored in the SPI flash at 0x7FF000 when the menu closes.
 
+## Virtual Printer
+
+**Virtual Printer:** in the **Full** bitstream, enable **Tools → Virtual Printer** before printing from a compatible game. The game must use its Game Boy Printer option; Link Port can remain Off. Finished pages are available in **Tools → Last Print** on HDMI and as `/Prints/print_NNN.bmp` on microSD. **Minimal does not contain the printer hardware**; firmware 1.9.1 shows this requirement instead of an ineffective switch. The printer detection fix requires firmware 1.9.1 and a Full bitstream built from the matching sources; updating only the firmware does not fix the hardware wake-up race.
+
+The printer regression test is `bash sim/tang/test_printer.sh` (OSS CAD Suite with Slang and Icarus). It checks a pending byte arriving before a WAIT write, the `0x81` device-ID response to INIT, receiver flush and bit alignment across a paused virtual Game Boy clock.
+
 ## Saves
 
 | Game from | Save goes to | When |

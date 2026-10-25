@@ -278,6 +278,8 @@ reg  [2:0] prn_n;
 reg        prn_valid, prn_q = 1'b1;
 reg [15:0] prn_idle;
 assign prn_so = prn_q;
+wire prn_pending = prn_valid && (ctrl[15] || ctrl[16]);
+wire prn_complete = lk_sc == 2'b01 && prn_n == 3'd7;
 
 // ------------------------------------------------------------ register read / ready
 always @* begin
@@ -303,7 +305,7 @@ always @* begin
             6'h1B: mem_ready = ~se_own;
             6'h1D: mem_rdata = {17'd0, af_n, af_mem[af_rp]};
             6'h0C: mem_ready = ~u_busy;
-            6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout; mem_rdata = {31'd0, ev}; end
+            6'h0D, 6'h12: begin mem_ready = is_wr | ev | timeout | prn_pending; mem_rdata = {31'd0, ev | prn_pending}; end
             6'h0E: mem_rdata = ctrl;
             6'h0F: mem_rdata = cfg;
             6'h18: mem_rdata = {23'd0, prn_valid, prn_byte};
@@ -318,7 +320,7 @@ end
 
 // DEEPWAIT (0x48) is WAIT that also lets the SDRAM self-refresh: the CPU is stalled on
 // this register, so it fetches nothing until it wakes up.
-assign sdram_sleep = mem_valid & is_io & ~is_wr & (reg_a == 6'h12) & ~ev & ~timeout;
+assign sdram_sleep = mem_valid & is_io & ~is_wr & (reg_a == 6'h12) & ~ev & ~timeout & ~prn_pending;
 
 // ------------------------------------------------------------ register writes and side effects
 always @(posedge clk) begin
@@ -352,7 +354,7 @@ always @(posedge clk) begin
             prn_sr    <= prn_tx;
             ev        <= 1;
         end
-    end else if (prn_idle != 16'hFFFF) begin
+    end else if (prn_idle != 16'hFFFF && !(ctrl[16] && ctrl[1])) begin
         prn_idle <= prn_idle + 1'd1;
         if (prn_idle == 16'd40000) prn_n <= 0;      // ~1.2 ms without a clock: resynchronise
     end
@@ -385,7 +387,13 @@ always @(posedge clk) begin
             6'h10: ioctl_addr <= mem_wdata[24:0];
             6'h11: begin ioctl_dout <= mem_wdata[15:0]; ioctl_wr <= 1; end
             6'h13: beep <= mem_wdata;
-            6'h18: prn_tx <= mem_wdata[7:0];
+            6'h18: begin
+                prn_tx <= mem_wdata[7:0];
+                if (mem_wdata[8]) begin
+                    prn_n <= 0; prn_valid <= 0; prn_rx <= 0;
+                    prn_sr <= 0; prn_q <= 0; prn_idle <= 0;
+                end
+            end
             6'h19: gpio_out <= mem_wdata[2:0];
             6'h1A: uart_div <= mem_wdata[11:0];
 `ifdef SCR_ENGINE
@@ -395,7 +403,7 @@ always @(posedge clk) begin
             default: ;
         endcase else case (reg_a)
             6'h03: begin dirty <= 0; remote <= 0; end
-            6'h18: prn_valid <= 0;
+            6'h18: if (!prn_complete) prn_valid <= 0;
             6'h1A: if (!uart_seen) rx_new <= 0;          // a byte arriving in this cycle stays flagged
             6'h0D, 6'h12: ev <= 0;
             default: ;
@@ -424,6 +432,8 @@ always @(posedge clk) begin
 `endif
         ev     <= 0; dirty <= 0;
         ms     <= 0; ms_div <= 0; wait_cnt <= 0;
+        prn_n <= 0; prn_valid <= 0; prn_rx <= 0; prn_tx <= 0;
+        prn_sr <= 0; prn_q <= 0; prn_idle <= 0;
     end
 end
 
