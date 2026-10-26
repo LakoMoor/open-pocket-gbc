@@ -1,0 +1,253 @@
+name: Build and publish release
+on:
+  push:
+    branches: [main]
+    paths: ['fw/**', 'rtl/**', 'apps/**', 'docs/web/**', 'tools/ci_release.py', 'tools/release_worker.py', '.github/workflows/release.yml']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional version check (must match firmware and apps)'
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: full-release
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: meta
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: python tools/ci_release.py metadata
+      - name: Check existing release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          target=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)
+          if [ -n "$target" ] && [ "$target" != "$GITHUB_SHA" ]; then
+            echo "Version already belongs to another commit. Bump all three version fields."
+            exit 1
+          fi
+  firmware:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: '2026-10-17'
+          github-token: ${{ github.token }}
+      - name: Install pinned RISC-V GCC
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rvgcc"
+          gh release download v15.2.0-1 --repo xpack-dev-tools/riscv-none-elf-gcc-xpack --pattern '*linux-x64.tar.gz*' --dir "$RUNNER_TEMP/rvgcc"
+          cd "$RUNNER_TEMP/rvgcc"
+          sha256sum --check *.sha
+          tar -xzf xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          echo "$RUNNER_TEMP/rvgcc/xpack-riscv-none-elf-gcc-15.2.0-1/bin" >> "$GITHUB_PATH"
+      - name: Test and build firmware and web
+        env:
+          GIT_BASH: /bin/bash
+        run: |
+          export TOOLS="$(dirname "$(dirname "$(command -v yosys)")")"
+          python tools/ci_release.py firmware
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-web
+          path: release-assets/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firmware-logs
+          path: |
+            build/printer_test/*.log
+            build/release-worker/**/*.log
+  fpga:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [full, minimal]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: '2026-10-17'
+          github-token: ${{ github.token }}
+      - name: Synthesize, place, route and require passing timing
+        env:
+          GIT_BASH: /bin/bash
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          export TOOLS="$(dirname "$(dirname "$(command -v yosys)")")"
+          python tools/ci_release.py "$VARIANT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fpga-${{ matrix.variant }}
+          path: release-assets/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fpga-${{ matrix.variant }}-logs
+          path: |
+            build/full/*.log
+            build/minimal/*.log
+            build/release-worker/**/*.txt
+            build/release-worker/**/*.log
+  studio:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            command: npx electron-builder --win portable --publish never
+          - os: macos-latest
+            command: npx electron-builder --mac --x64 --arm64 --publish never
+          - os: ubuntu-24.04
+            command: npx electron-builder --linux --publish never
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: apps/studio
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/studio/package-lock.json
+      - run: npm ci
+      - run: ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-${{ runner.os }}
+          path: |
+            apps/studio/dist/*.exe
+            apps/studio/dist/*.dmg
+            apps/studio/dist/*.zip
+            apps/studio/dist/*.AppImage
+            apps/studio/dist/*.deb
+          if-no-files-found: error
+  android:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci --prefix apps/studio
+      - run: bash apps/android/gradlew -p apps/android assembleRelease
+      - env:
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          mkdir -p release-assets
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "release-assets/OpenPocket-$VERSION.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: release-assets/*
+          if-no-files-found: error
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [source, firmware, fpga, studio, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-web
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fpga-*
+          merge-multiple: true
+          path: fpga-download
+      - run: |
+          mkdir -p release-assets
+          find fpga-download -maxdepth 1 -type f -name 'opgbc_*.bin' -exec cp {} release-assets/ \;
+          find fpga-download -maxdepth 1 -type f -name '*-timing.log' -exec cp {} release-assets/ \;
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: studio-*
+          merge-multiple: true
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: release-assets
+      - run: python tools/ci_release.py manifest
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.source.outputs.tag }}
+          VERSION: ${{ needs.source.outputs.version }}
+          SOURCE_SHA: ${{ needs.source.outputs.commit }}
+        run: |
+          cat > release-notes.md <<EOF
+          SD photo gallery on HDMI and LCD: Tools → Screenshots / Print Album / Photos on SD.
+          Supports uncompressed 24/32-bit BMP, fit/actual-size views and panning.
+          Includes virtual Game Boy Printer detection fixes. Minimal has no printer hardware.
+          Update both firmware and the matching FPGA binary; power-cycle after the bitstream update.
+          Validation: automated regressions, firmware build, Full/Minimal placement and passing final timing.
+          Not tested on physical hardware. Native installers are unsigned development builds.
+          Source: $SOURCE_SHA. Asset hashes: build-manifest.json and SHA256SUMS.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            target=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+            if [ -z "$target" ]; then
+              test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+              target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            fi
+            test "$target" = "$SOURCE_SHA"
+          else
+            gh release create "$TAG" --target "$SOURCE_SHA" --draft --title "Open Pocket GBC $VERSION" --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
+          mkdir -p verify
+          gh release download "$TAG" --dir verify
+          (cd verify && sha256sum --check SHA256SUMS)
+          gh release edit "$TAG" --draft=false --latest --notes-file release-notes.md

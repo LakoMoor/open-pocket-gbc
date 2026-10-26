@@ -80,6 +80,14 @@ python tools/lcd_shot.py lcd.png --osd hdmi.png --keys "M . D D"
 
 All settings are stored in the SPI flash at 0x7FF000 when the menu closes.
 
+## Photo gallery (1.9.2)
+
+Tools → **Screenshots** opens `/Screenshots`, **Print Album** opens `/Prints`, and **Photos on SD** browses the card's folders for pictures. Folders sort before BMP files. Open a photo with A. A switches between Fit and actual size, arrows pan an actual-size image, and B / Start returns to the album. Long printer pages initially open at actual size so their text stays readable. Empty folders, missing SD cards and unsupported/corrupt files show a message.
+
+Both HDMI and the SPI LCD show pictures, including in Minimal (which can view saved printer pages but cannot emulate a printer). The running game's ROM is untouched; the game pauses and its frame is restored when the photo closes. Tools → Last Print also shows the most recent in-memory print on both displays, without requiring the saved BMP.
+
+The decoder accepts uncompressed 24-bit BGR and 32-bit BGRX Windows BMP, bottom-up or top-down, up to 4096 × 4096. Screenshots and printer pages produced by the board work directly. Convert other photos to this format first; PNG, JPEG, indexed BMP and compressed BMP are not supported. Install both firmware and bitstream 1.9.2+; old bitstreams report that an update is required. Physical-device validation is still required.
+
 ## Virtual Printer
 
 **Virtual Printer:** in the **Full** bitstream, enable **Tools → Virtual Printer** before printing from a compatible game. The game must use its Game Boy Printer option; Link Port can remain Off. Finished pages are available in **Tools → Last Print** on HDMI and as `/Prints/print_NNN.bmp` on microSD. **Minimal does not contain the printer hardware**; firmware 1.9.1 shows this requirement instead of an ineffective switch. The printer detection fix requires firmware 1.9.1 and a Full bitstream built from the matching sources; updating only the firmware does not fix the hardware wake-up race.

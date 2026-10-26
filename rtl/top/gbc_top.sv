@@ -156,6 +156,9 @@ wire [11:0] pad_uart;
 wire        uart_menu, uart_reset, uart_seen;
 wire  [7:0] uart_byte;
 wire [31:0] ctrl, cfg;
+wire image_we, image_first;
+wire [14:0] image_pixel;
+wire image_mode = ctrl[20];
 `ifdef MINIMAL
 wire        bt_en = 1'b0;
 `else
@@ -212,6 +215,7 @@ iosys #(.CLK_HZ(33_750_000)) u_io (
     .sd_cs_n(sd_dat3), .sd_clk(sd_clk), .sd_mosi(sd_cmd), .sd_miso(sd_dat0),
     .cart_cs_n(cart_cs_n), .cart_clk(cart_clk), .cart_mosi(cart_mosi), .cart_miso(cart_miso),
     .uart_tx(uart_tx),
+    .image_we(image_we), .image_first(image_first), .image_pixel(image_pixel),
     .link_sc(prn_sc_in), .link_si(prn_si_in), .prn_so(prn_so),
     .inputs({uart_reset, uart_menu, s2_s[1], s1_s[1], pad_arm}),
     .frame_tick(lcd_vs_rise), .stat_gbc(isGBC), .stat_2x(speed), .stat_buf(fb_newest),
@@ -446,8 +450,8 @@ reg [15:0] lcd_txt_q;
 wire lcd_bl_core;
 lcd_st7735 #(.CLK_HZ(33_750_000)) u_lcd (
     .clk(clk_sys), .reset(sys_rst | lcd_off),
-    .px_we(px_we), .px_first(px_first), .px_data(px_data),
-    .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .crop(lcd_crop), .menu_open(menu_open & menu_dim), .dbg_on(dbg_on), .slow(lcd_slow),
+    .px_we(image_mode ? image_we : px_we), .px_first(image_mode ? image_first : px_first), .px_data(image_mode ? image_pixel : px_data),
+    .isGBC(image_mode | isGBC), .dmg_pal(dmg_pal), .gbc_raw(image_mode | gbc_raw), .crop(lcd_crop), .menu_open(menu_open & menu_dim), .dbg_on(image_mode ? 1'b0 : dbg_on), .slow(lcd_slow),
     .txt_addr(lcd_txt_a), .txt_q(lcd_txt_q),
     .lcd_scl(lcd_scl), .lcd_sda(lcd_sda), .lcd_cs(lcd_cs), .lcd_dc(lcd_dc),
     .lcd_rst(lcd_rst), .lcd_bl(lcd_bl_core)
@@ -628,7 +632,7 @@ video_out #(.P480(P480)) u_video (
     .line_req_tgl(line_req_tgl), .line_req_no(line_req_no), .vs_tgl(vs_tgl),
     .lb_addr(lb_raddr), .lb_q(lb_q),
     .txt_addr(txt_raddr), .txt_q(txt_q[7:0]),
-    .isGBC(isGBC), .dmg_pal(dmg_pal), .gbc_raw(gbc_raw), .disp_mode(disp_mode),
+    .isGBC(image_mode | isGBC), .dmg_pal(dmg_pal), .gbc_raw(image_mode | gbc_raw), .disp_mode(image_mode ? 2'd0 : disp_mode),
     .osd_addr(osd_raddr), .osd_q(osd_q),
     .scale4(1'b0), .menu_open(menu_open), .osd_dim(menu_dim), .dbg_on(dbg_on),
     .dbg(dbg)

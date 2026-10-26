@@ -63,6 +63,10 @@ The design as nextpnr placed it on the GW2AR-18: every used LUT, flip-flop and b
 
 ## Quick start
 
+**Photo gallery (1.9.2):** Tools → Screenshots / Print Album / Photos on SD. Browse saved BMP images on HDMI and LCD, switch Fit / actual size with A and pan with the d-pad. Requires matching firmware and bitstream; [formats and controls](docs/menu.md#photo-gallery-192).
+
+**Automatic releases:** [Build and publish release](https://github.com/LakoMoor/open-pocket-gbc/actions/workflows/release.yml) builds firmware, Full/Minimal, APK, desktop apps and the web archive on GitHub and publishes only after all required builds and checks pass. [Details](docs/build.md#automatic-complete-releases).
+
 ```sh
 ./build.sh gbc_top                                  # yosys -> nextpnr -> gowin_pack (~10 min)
 fw/build.sh                                         # menu firmware (RISC-V GCC)

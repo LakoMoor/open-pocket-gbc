@@ -24,6 +24,14 @@ Interface 1 stays a serial port (COM*n*). It is used by the [USB remote](remote.
 
 ## Build
 
+### Automatic complete releases
+
+`.github/workflows/release.yml` builds and publishes from `main` on firmware/RTL/app/web/release-script changes, or manually from **Actions → Build and publish release → Run workflow**. Firmware, Studio and Android must share a new `x.y.z` version. Existing tags for other commits are rejected instead of overwritten. Only the final publication job has repository write permission.
+
+GitHub-hosted runners build the firmware, Full and Minimal FPGA variants with passing final timing, APK, Windows/macOS/Linux Studio installers, web archive, timing reports and a SHA256/source manifest. Every job must succeed. Files are uploaded to a draft release, downloaded and checked before publication. Placement logs and successful build artifacts remain available in Actions when another job fails. No Codex, local PC, GitHub PAT or model quota is needed; the workflow uses `GITHUB_TOKEN`.
+
+The workflow does not make failing RTL placeable by itself. FPGA attempts are bounded and failed/incomplete builds never become a published release. The local `release_worker.py` is an alternative, not a second publisher to run at the same time.
+
 ```sh
 ./build.sh gbc_top          # ~8 minutes; output: build/gbc_top/gbc_top.fs
 ```

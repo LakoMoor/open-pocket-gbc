@@ -45,6 +45,9 @@ module iosys #(
     input             cart_miso,
 
     output            uart_tx,
+    output reg        image_we,
+    output reg        image_first,
+    output reg [14:0] image_pixel,
 
     // link port as a slave (Game Boy Printer): the Game Boy clocks SC, we answer on SO
     input             link_sc,
@@ -186,9 +189,9 @@ localparam IO_ENGINE = 16'h0000;
 // REG_ID [15:0]: bit 0 base, bit 1 stream engine, bit 2 USB audio, bit 3 MINIMAL (no HDMI, link,
 // LEDs, cartridge port or USB audio)
 `ifdef MINIMAL
-localparam IO_VERSION = 16'h0009 | IO_ENGINE;
+localparam IO_VERSION = 16'h0019 | IO_ENGINE; // bit 4: CPU image stream for gallery / LCD
 `else
-localparam IO_VERSION = 16'h0005 | IO_ENGINE;
+localparam IO_VERSION = 16'h0015 | IO_ENGINE;
 `endif
 
 // ------------------------------------------------------------ USB audio
@@ -325,6 +328,7 @@ assign sdram_sleep = mem_valid & is_io & ~is_wr & (reg_a == 6'h12) & ~ev & ~time
 // ------------------------------------------------------------ register writes and side effects
 always @(posedge clk) begin
     ioctl_wr <= 0;
+    image_we <= 0;
     osd_we   <= 0;
     txt_we   <= 0;
 
@@ -394,6 +398,7 @@ always @(posedge clk) begin
                     prn_sr <= 0; prn_q <= 0; prn_idle <= 0;
                 end
             end
+            6'h1E: begin image_we <= 1; image_first <= mem_wdata[15]; image_pixel <= mem_wdata[14:0]; end
             6'h19: gpio_out <= mem_wdata[2:0];
             6'h1A: uart_div <= mem_wdata[11:0];
 `ifdef SCR_ENGINE

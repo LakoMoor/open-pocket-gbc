@@ -74,6 +74,8 @@
 #define C_PRN_VIRT  (1u << 16)  // virtual printer: the core's serial port talks to REG_PRN
 #define C_LED_SHIFT 17          // [18:17] what the LEDs show: status, CPU clock, sound, activity
 #define C_BT        (1u << 19)  // ZS-040 / HC-05 Bluetooth serial module on the link pins (42 RX, 56 TX)
+#define C_IMAGE     (1u << 20)  // CPU picture stream to LCD; framebuffer shown as raw GBC RGB on HDMI
+#define REG_IMAGE   IO(0x78)    // write [14:0] RGB555 pixel, [15] first pixel in 160x144 frame
 
 // SDRAM layout (byte addresses, the CPU sees SDRAM at 0)
 #define ROM_BASE    0x000000u

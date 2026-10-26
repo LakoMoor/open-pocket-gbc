@@ -11,8 +11,9 @@
 #include "gbcart.h"
 #include "osd.h"
 #include "ff.h"
+#include "bmp.h"
 
-#define FW_VERSION      "1.9.1"
+#define FW_VERSION      "1.9.2"
 #define GAMES_BASE      0x200000u
 #define SAVE_BASE       0x600000u       // 15 slots of 0x22000: header sector + up to 128 KB
 #define SAVE_SLOT       0x22000u
@@ -658,6 +659,10 @@ static uint32_t pix_rgb(uint16_t p, int gbc) {
     return r << 16 | g << 8 | b;
 }
 
+static uint16_t rgb15(uint32_t rgb) {
+    return (uint16_t)(((rgb >> 19) & 31) | ((rgb >> 11) & 31) << 5 | ((rgb >> 3) & 31) << 10);
+}
+
 // the newest complete frame to /Screenshots/<game>_NNN.bmp; returns 0 when saved
 static int screenshot(char *saved_as, int n) {
     if (!sd_mounted) sd_mount();
@@ -1188,20 +1193,20 @@ static void vprn_poll(uint32_t now) {
     }
 }
 
-// the last page on HDMI through the framebuffer (the game is paused under the menu); the
-// frame of the game is kept and put back. The LCD shows a hint: it only gets the core's picture.
+// The last page on HDMI and LCD; preserve the game frame without replacing its ROM.
 static void vprn_view(void) {
+    if (!(REG_ID & 16)) { message_screen("Update the bitstream", "LCD photos need bitstream 1.9.2+"); wait_ms(1800); return; }
     if (!prn_last_rows) { message_screen("Nothing printed yet", "print from a game first"); wait_ms(1500); osd_invalidate(); return; }
-    if (hdmi_is_off()) { message_screen("Turn HDMI on to view", "the BMP is in /Prints"); wait_ms(1800); osd_invalidate(); return; }
     uint32_t st = stat_read();
-    int gbc = st & 1, buf = (st >> 3) & 3;
+    int buf = (st >> 3) & 3;
     uint32_t fb = 0x700000u + (uint32_t)buf * 0x10000, keep = 0x730000u;
     volatile uint32_t *f = (volatile uint32_t *)sdram(fb), *k = (volatile uint32_t *)sdram(keep);
     for (int i = 0; i < 160 * 144 / 2; i++) k[i] = f[i];
     static const uint8_t g5[4] = { 30, 21, 11, 2 };
     int lines = prn_last_rows * 8, scroll = 0, maxs = lines > 144 ? lines - 144 : 0;
-    uint32_t saved = ctrl;
-    ctrl &= ~C_DIM;
+    uint32_t saved = ctrl, saved_cfg = REG_CFG;
+    REG_CFG = saved_cfg & ~(1u << 6);
+    ctrl = (ctrl | C_IMAGE) & ~C_DIM;
     ctrl_write();
     osd_clear(AT(CL_WHITE, CL_GAME));
     osd_present();
@@ -1227,7 +1232,8 @@ static void vprn_view(void) {
                             c = ((t[o] >> b) & 1) | (((t[o + 1] >> b) & 1) << 1);
                         }
                         int sh = (pr.pal >> (2 * c)) & 3;
-                        uint32_t px = gbc ? (uint32_t)(g5[sh] | g5[sh] << 5 | g5[sh] << 10) : (uint32_t)sh;
+                        uint32_t px = (uint32_t)(g5[sh] | g5[sh] << 5 | g5[sh] << 10);
+                        REG_IMAGE = px | ((x + h == 0 && y == 0) ? 0x8000u : 0);
                         w |= px << (16 * h);
                     }
                     f[(y * 160 + x) >> 1] = w;
@@ -1240,7 +1246,12 @@ static void vprn_view(void) {
         if ((kk & K_DOWN) && scroll < maxs) { scroll = scroll + 8 > maxs ? maxs : scroll + 8; redraw = 1; }
         if ((kk & K_UP) && scroll > 0) { scroll = scroll < 8 ? 0 : scroll - 8; redraw = 1; }
     }
-    for (int i = 0; i < 160 * 144 / 2; i++) f[i] = k[i];
+    REG_CFG = saved_cfg;
+    for (int i = 0; i < 160 * 144 / 2; i++) {
+        uint32_t pair = k[i]; f[i] = pair;
+        REG_IMAGE = rgb15(pix_rgb(pair & 0x7FFF, st & 1)) | (i == 0 ? 0x8000u : 0);
+        REG_IMAGE = rgb15(pix_rgb((pair >> 16) & 0x7FFF, st & 1));
+    }
     ctrl = saved;
     ctrl_write();
     osd_invalidate();
@@ -1689,11 +1700,13 @@ static void scr_poll(void) {
     uint32_t st = stat_read();
     int gbc = st & 1, buf = (st >> 3) & 3;
     uint16_t fr = (uint16_t)(st >> 16);
-    int mode = gbc | (set.gbc_raw ? 2 : 0) | (set.dmg_pal << 2);
+    int raw = set.gbc_raw;
+    if (ctrl & C_IMAGE) { gbc = 1; raw = 1; }
+    int mode = gbc | (raw ? 2 : 0) | (set.dmg_pal << 2);
     if (mode != scr_mode) {
         scr_mode = mode;
         scr_hdr('P', 14);
-        scr_put(gbc); scr_put(set.gbc_raw);
+        scr_put(gbc); scr_put(raw);
         for (int i = 0; i < 4; i++) { uint32_t v = dmg_pals[set.dmg_pal % 5][i]; scr_put(v >> 16); scr_put(v >> 8); scr_put(v); }
     }
     int of = ((ctrl & C_OSD) ? 1 : 0) | ((ctrl & C_DIM) ? 2 : 0);
@@ -1875,7 +1888,7 @@ static int status_glyphs(uint8_t *g) {
 enum {
     P_MAIN, P_LIBRARY, P_BROWSER, P_DISPLAY, P_AUDIO, P_CONTROLS, P_SYSTEM, P_INFO,
     P_CART, P_FILEACT, P_GAME, P_POWER, P_SLEEP, P_CHOICE,
-    P_RECENT, P_CHEATS, P_CHEATACT, P_CODE, P_FLACT, P_UPDATE, P_UPDCONFIRM, P_TOOLS
+    P_RECENT, P_CHEATS, P_CHEATACT, P_CODE, P_FLACT, P_UPDATE, P_UPDCONFIRM, P_TOOLS, P_GALLERY
 };
 enum {
     I_NONE, I_RESUME, I_LIBRARY, I_SAVE, I_RESET, I_PG_DISPLAY, I_PG_AUDIO, I_PG_CONTROLS,
@@ -1885,7 +1898,7 @@ enum {
     I_SRC_CART, I_PLAY_CART, I_ERASE_CART, I_PLAY_SD, I_WRITE_CART, I_PG_POWER, I_CHOICE,
     I_PG_RECENT, I_RECENT, I_SHOT, I_PG_CHEATS, I_CHEAT, I_CHEAT_ADD, I_CHEAT_TOGGLE, I_CHEAT_EDIT,
     I_CHEAT_DEL, I_COPY_FLASH, I_FL_PLAY, I_FL_DEL, I_PG_UPDATE, I_UPD_FW, I_UPD_FPGA, I_UPD_GO,
-    I_PG_TOOLS, I_PRINTER, I_LASTPRINT
+    I_PG_TOOLS, I_PRINTER, I_LASTPRINT, I_GALLERY, I_GDIR, I_GPHOTO, I_GUP
 };
 
 typedef struct {
@@ -2003,6 +2016,7 @@ static void build_browser(void) {
 }
 
 // ---------------------------------------------------------------- page builders
+#include "gallery.inc"
 // choices of one setting as their own page (Analogue OS theme)
 static item_t ch_item;                  // copy of the setting's item
 static int    ch_ret_page, ch_ret_cursor;
@@ -2107,11 +2121,16 @@ static void build_page(void) {
         add(I_CHEAT_DEL, G_RESET, "Delete Code", "Remove the code from this game.");
         break;
     }
+    case P_GALLERY:
+        strcpy(page_title, "Photo Gallery"); build_gallery(); break;
     case P_CODE:
         strcpy(page_title, "Game Genie Code");
         break;
     case P_TOOLS: {
         strcpy(page_title, "Tools");
+        add(I_GALLERY, G_DISPLAY, "Screenshots", "Browse screenshots on SD. HDMI and LCD.")->arg = 0;
+        add(I_GALLERY, G_DISPLAY, "Print Album", "Browse saved Game Boy Printer pages on SD.")->arg = 1;
+        add(I_GALLERY, G_FOLDER, "Photos on SD", "Browse folders for 24 / 32-bit RGB BMP photos.")->arg = 2;
         if (REG_ID & 8) { add_info("Printer unavailable", "Install the Full bitstream to use a Game Boy Printer."); break; }
         item_t *it = add(I_PRINTER, G_DISPLAY, "Game Boy Printer", "Be a printer for a real Game Boy on the link port. The running game is closed first.");
         strcpy(it->value, "link port");
@@ -3338,6 +3357,22 @@ static int activate(item_t *it, int dir) {
         break;
     case I_PG_RECENT: go(P_RECENT, 0); break;
     case I_PG_TOOLS: go(P_TOOLS, 0); break;
+    case I_GALLERY:
+        if (!sd_mounted) sd_mount();
+        strcpy(gallery_root, gallery_roots[it->arg]); strcpy(gallery_dir, gallery_root);
+        go(P_GALLERY, 0); break;
+    case I_GUP: gallery_parent(); go(P_GALLERY, 0); break;
+    case I_GDIR: {
+        char path[256];
+        if (strlen(gallery_dir) + strlen(it->label) + 2 > sizeof path) break;
+        sfmt(path, sizeof path, "%s%s%s", gallery_dir, !strcmp(gallery_dir, "/") ? "" : "/", it->label);
+        strcpy(gallery_dir, path); go(P_GALLERY, 0); break;
+    }
+    case I_GPHOTO: {
+        char path[520]; int keep_cursor = cursor;
+        sfmt(path, sizeof path, "%s%s%s", gallery_dir, !strcmp(gallery_dir, "/") ? "" : "/", it->label);
+        gallery_view(path); go(P_GALLERY, 0); cursor = keep_cursor; break;
+    }
     case I_LASTPRINT:
         vprn_view();
         go(P_TOOLS, 1);
@@ -3455,6 +3490,10 @@ static int activate(item_t *it, int dir) {
 static int back(void) {
     if (two_level() && page == cats[cat].page) { focus = 0; return 0; }
     switch (page) {
+    case P_GALLERY:
+        if (!strcmp(gallery_dir, gallery_root)) go(P_TOOLS, 0);
+        else { gallery_parent(); go(P_GALLERY, 0); }
+        break;
     case P_CHOICE: go(ch_ret_page, 0); cursor = ch_ret_cursor; break;
     case P_CHEATACT: go(P_CHEATS, 0); cursor = ch_sel; break;
     case P_CODE: go(ed_slot >= 0 ? P_CHEATACT : P_CHEATS, 0); break;

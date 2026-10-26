@@ -35,6 +35,11 @@ initial begin
  force dut.prn_n=0; // reproduce a power-up at byte boundary even on the unfixed design
  repeat(5)@(negedge clk);reset=0;release dut.prn_n;
  wr(32'h02000038,32'h00010000);
+ wr(32'h02000078,32'h0000801f);
+ if(dut.image_we!==1 || dut.image_first!==1 || dut.image_pixel!==15'h001f)$fatal(1,"image first pixel register failed");
+ @(negedge clk);if(dut.image_we!==0)$fatal(1,"image pixel write strobe did not clear");
+ wr(32'h02000078,32'h000003e0);
+ if(dut.image_first!==0 || dut.image_pixel!==15'h03e0)$fatal(1,"image next pixel register failed");
  wr(32'h02000060,32'h100);
  transfer(8'h88,reply);
  wr(32'h02000034,200); // WAIT write clears edge events after the byte already arrived
@@ -75,7 +80,7 @@ initial begin
  rd(32'h02000060,received);if(received!==32'h13c)$fatal(1,"read cleared a simultaneously arriving byte: %x",received);
  reset=1;repeat(3)@(negedge clk);
  if(dut.prn_n!==0 || dut.prn_valid!==0 || so!==0)$fatal(1,"warm reset did not reset printer");
- $display("PASS: printer detection, pending-byte wake-up, pause, read/receive race, flush and warm reset");$finish;
+ $display("PASS: printer detection, byte wake-up/race, pause/reset and image pixel registers");$finish;
 end
 initial begin #1000000;$fatal(1,"timeout");end
 endmodule
