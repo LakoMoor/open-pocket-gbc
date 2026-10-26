@@ -3371,7 +3371,7 @@ static int activate(item_t *it, int dir) {
     case I_GPHOTO: {
         char path[520]; int keep_cursor = cursor;
         sfmt(path, sizeof path, "%s%s%s", gallery_dir, !strcmp(gallery_dir, "/") ? "" : "/", it->label);
-        gallery_view(path); go(P_GALLERY, 0); cursor = keep_cursor; break;
+        gallery_view(path); cursor = keep_cursor; go(P_GALLERY, 1); break;
     }
     case I_LASTPRINT:
         vprn_view();
